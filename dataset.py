@@ -9,7 +9,7 @@ class SentimentDataset(Dataset):
         """
         :param data_path: train.csv 或 test.csv 的路径
         :param vocab_path: vocab.json 的路径
-        :param max_len: 句子的固定长度（超过截断，不足补齐）
+        :param max_len: 句子长度（超过截断，不足补齐）
         """
         # 1. 加载数据
         self.df = pd.read_csv(data_path)
@@ -39,7 +39,7 @@ class SentimentDataset(Dataset):
 
         # 3. Padding & Truncating (填充与截断)
         if len(ids) < self.max_len:
-            # 不足部分补 pad_id (通常是 0)
+            # 不足部分补 0
             ids += [self.pad_id] * (self.max_len - len(ids))
         else:
             # 超过部分直接截断
@@ -48,7 +48,7 @@ class SentimentDataset(Dataset):
         return torch.tensor(ids, dtype=torch.long), torch.tensor(label, dtype=torch.long)
 
 
-# ================= 测试代码 =================
+# 简单测一下
 def get_dataloader(data_path, vocab_path, batch_size=32, max_len=50, shuffle=True):
     dataset = SentimentDataset(data_path, vocab_path, max_len)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
@@ -56,11 +56,11 @@ def get_dataloader(data_path, vocab_path, batch_size=32, max_len=50, shuffle=Tru
 
 
 if __name__ == "__main__":
-    # 这里的路径请替换为你上一阶段生成的路径
+    # 连接路径
     TRAIN_CSV = "path/to/train.csv"
     VOCAB_JSON = "path/to/vocab.json"
 
-    # 简单测试一下
+    # 简单测试一下输出是否正确
     try:
         test_loader = get_dataloader(TRAIN_CSV, VOCAB_JSON, batch_size=2)
         first_batch = next(iter(test_loader))
