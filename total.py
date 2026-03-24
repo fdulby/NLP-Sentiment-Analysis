@@ -3,8 +3,40 @@ import pandas as pd
 import jieba
 import json
 import os
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from collections import Counter
+from torch.utils.data import Dataset, DataLoader
+
+# [优化点 2] 统一配置字典：涵盖路径、模型结构、训练参数
+CONFIG = {
+    "paths": {
+        "input_raw": "ChnSentiCorp.csv",      # 原始数据集
+        "output_dir": "./processed_data/",    # 输出目录
+        "train_csv": "./processed_data/train.csv",
+        "test_csv": "./processed_data/test.csv",
+        "vocab_json": "./processed_data/vocab.json",
+        "model_save": "lstm_best.pth",
+        "loss_plot": "loss_curve.png"
+    },
+    "model": {
+        "embedding_dim": 128,
+        "hidden_dim": 256,
+        "n_layers": 2,
+        "dropout": 0.5,
+        "max_len": 64
+    },
+    "train": {
+        "batch_size": 64,
+        "lr": 0.001,
+        "epochs": 10,
+        "device": "cuda" if torch.cuda.is_available() else "cpu"
+    }
+}
 
 # 配置路径，存在输入的中文数据集与输出
 INPUT_DATA_PATH = ""  # 例如: "ChnSentiCorp.csv"
@@ -92,11 +124,6 @@ if __name__ == "__main__":
         print(f"词表已保存至: {vocab_path}")
 
 
-import torch
-from torch.utils.data import Dataset, DataLoader
-import pandas as pd
-import json
-
 
 class SentimentDataset(Dataset):
     def __init__(self, data_path, vocab_path, max_len=50):
@@ -165,10 +192,6 @@ if __name__ == "__main__":
     except Exception as e:
         print("请检查路径是否正确后再测试:", e)
 
-
-
-import torch
-import torch.nn as nn
 
 
 class SentimentLSTM(nn.Module):
@@ -243,33 +266,6 @@ if __name__ == "__main__":
     test_input = torch.randint(0, V_SIZE, (4, 50))
     test_output = model(test_input)
     print("模型输出形状:", test_output.shape)  # 应该是 [# 4, 2]
-
-
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import matplotlib.pyplot as plt
-import json
-import os
-from dataset import get_dataloader  # 导入逻辑
-from model import SentimentLSTM  # 导入模型
-
-#超参数
-config = {
-    "train_data_path": "processed_data/train.csv",
-    "test_data_path": "processed_data/test.csv",
-    "vocab_path": "processed_data/vocab.json",
-    "embedding_dim": 128,
-    "hidden_dim": 256,
-    "n_layers": 2,
-    "dropout": 0.5,
-    "batch_size": 64,
-    "lr": 0.001,
-    "epochs": 10,
-    "max_len": 64,
-    "device": "cuda" if torch.cuda.is_available() else "cpu"
-}
 
 
 def train():
