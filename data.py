@@ -5,7 +5,7 @@ import os
 from sklearn.model_selection import train_test_split
 from collections import Counter
 
-# ================= 配置路径（请根据你的实际情况填写） =================
+# 配置路径，存在输入的zhon wen数据集与
 INPUT_DATA_PATH = ""  # 例如: "ChnSentiCorp.csv" 或 "waimai_10k.csv"
 OUTPUT_DIR = ""  # 例如: "./processed_data/"
 
