@@ -5,8 +5,8 @@ import os
 from sklearn.model_selection import train_test_split
 from collections import Counter
 
-# 配置路径，存在输入的zhon wen数据集与
-INPUT_DATA_PATH = ""  # 例如: "ChnSentiCorp.csv" 或 "waimai_10k.csv"
+# 配置路径，存在输入的中文数据集与输出
+INPUT_DATA_PATH = ""  # 例如: "ChnSentiCorp.csv"
 OUTPUT_DIR = ""  # 例如: "./processed_data/"
 
 # 创建输出目录
@@ -14,7 +14,7 @@ if OUTPUT_DIR and not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
 
 
-# ================= 1. 加载数据 =================
+#加载数据
 def load_and_clean_data(path):
     # 假设 CSV 包含 'label' 和 'review' 两列
     df = pd.read_csv(path)
@@ -23,19 +23,19 @@ def load_and_clean_data(path):
     return df
 
 
-# ================= 2. 分词处理 =================
+# 分词处理
 def tokenize_text(text):
     # 使用 jieba 精确模式分词
-    # 也可以根据需要在这里去除停用词、标点符号等
+    # 在这里去除停用词、标点符号？
     tokens = jieba.lcut(str(text))
     return " ".join(tokens)  # 用空格拼接，方便存入 CSV
 
 
-# ================= 3. 构建词表 (Vocab) =================
+# 建立vocab
 def build_vocab(tokenized_texts, save_path, max_vocab_size=10000):
     """
-    根据训练集生成词典：{词语: ID}
-    包含特殊 token: <PAD> (填充), <UNK> (未知词)
+    训练集生成词典：{词语: ID}
+    特殊 token: <PAD> (填充), <UNK> (未知词)
     """
     all_words = []
     for text in tokenized_texts:
@@ -57,7 +57,7 @@ def build_vocab(tokenized_texts, save_path, max_vocab_size=10000):
     return vocab
 
 
-# ================= 主流程 =================
+#main
 if __name__ == "__main__":
     if not INPUT_DATA_PATH or not OUTPUT_DIR:
         print("错误：请先在脚本中设置 INPUT_DATA_PATH 和 OUTPUT_DIR 路径！")
@@ -67,11 +67,11 @@ if __name__ == "__main__":
         # 1. 加载
         data = load_and_clean_data(INPUT_DATA_PATH)
 
-        # 2. 分词 (这一步在数据量大时可能较慢)
+        # 2. 分词
         print("正在进行 jieba 分词...")
         data['review_tokens'] = data['review'].apply(tokenize_text)
 
-        # 3. 划分数据集 (80% 训练, 20% 测试)
+        # 3. 划分 (80% 训练, 20% 测试)
         train_df, test_df = train_test_split(data[['label', 'review_tokens']], test_size=0.2, random_state=42)
 
         # 4. 构建词表 (仅基于训练集构建，防止测试集信息泄露)
