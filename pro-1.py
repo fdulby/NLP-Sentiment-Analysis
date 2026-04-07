@@ -32,6 +32,10 @@ CONFIG = {
     "loss_plot": r"D:\LSTM\data_online\loss_curve.png",  # 训练曲线图
     "cm_plot": r"D:\LSTM\data_online\confusion_matrix.png",  # 混淆矩阵图
 
+    # === 新增以下两个防过拟合参数 ===
+    "weight_decay": 1e-4,    # L2 权重衰减系数 (通常在 1e-5 到 1e-3 之间)
+    "label_smoothing": 0.1,  # 标签平滑系数 (通常设为 0.1)
+
     # 【模型超参数】
     "vocab_size_max": 20000,  # 数据量变大，增加词表容量
     "embedding_dim": 256,
@@ -243,8 +247,12 @@ def train_model(train_df, dev_df, vocab):
         CONFIG["dropout"]
     ).to(CONFIG["device"])
 
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=CONFIG["lr"])
+    # 1. 损失函数：加入标签平滑防过拟合
+    criterion = nn.CrossEntropyLoss(label_smoothing=CONFIG["label_smoothing"])
+
+    # 2. 优化器：加入 L2 正则化 (weight_decay) 防过拟合
+    optimizer = optim.Adam(model.parameters(), lr=CONFIG["lr"], weight_decay=CONFIG["weight_decay"])
+
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
     scaler = GradScaler() if CONFIG["use_amp"] and CONFIG["device"] == "cuda" else None
 
