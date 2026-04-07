@@ -388,6 +388,28 @@ def final_model(test_df, vocab):
     plt.savefig(CONFIG["cm_plot"], dpi=150)
     print(f"[Plot] 混淆矩阵已保存: {CONFIG['cm_plot']}")
 
+    def show_misclassified(test_df, all_preds, all_labels, num_samples=10):
+        """打印预测错误的样本进行分析"""
+        print("\n" + "-" * 30 + " 错题集分析 (部分) " + "-" * 30)
+        # 找到所有预测错误的索引
+        error_indices = [i for i, (p, l) in enumerate(zip(all_preds, all_labels)) if p != l]
+
+        # 随机抽取样本打印
+        import random
+        selected_errors = random.sample(error_indices, min(num_samples, len(error_indices)))
+
+        for idx in selected_errors:
+            row = test_df.iloc[idx]
+            print(f"【真实标签】: {'正面' if all_labels[idx] == 1 else '负面'}")
+            print(f"【预测结果】: {'正面' if all_preds[idx] == 1 else '负面'}")
+            # 这里展示原始文本 review 或分词后的 review_tokens
+            text = row['review'] if 'review' in row else row['review_tokens']
+            print(f"【评论原内容】: {text}")
+            print("-" * 60)
+
+    # 在 final_model 内部调用
+    show_misclassified(test_df, all_preds, all_labels, num_samples=15)
+
     return test_acc
 
 
