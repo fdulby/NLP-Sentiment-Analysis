@@ -1,0 +1,6 @@
+# 与《实验指导》中依赖说明配合使用
+torch>=1.9.0
+pandas>=1.0.0
+jieba>=0.42.0
+scikit-learn>=0.24.0
+datasets>=2.0.0
