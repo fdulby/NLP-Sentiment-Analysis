@@ -252,12 +252,10 @@ class BiLSTMClassifier(nn.Module):
         logits = self.fc(h)  # (batch, num_classes)
         return logits
 
-
         #raise NotImplementedError(
             #"请在本类中补全 __init__ 中 Bi-LSTM 相关参数 与 本 forward 的完整前向过程；"
             #"禁止使用 nn.LSTM 等封装的循环层，详见类内注释。"
         #)
-
 
 @torch.no_grad()
 def evaluate(
