@@ -109,10 +109,104 @@ class BiLSTMClassifier(nn.Module):
         #  填充约定一致；实现方式不唯一）。
 
         # TODO: 在此声明你为 Bi-LSTM 各层、各向所需的可学习参数（例如各门的 nn.Linear 与 nn.Parameter 等）
+        # 采用“一个 Linear 同时计算 4 个门”的写法：
+        # concat([h_prev, x_t]) -> Linear(hidden + input, 4*hidden)
+        # 然后 chunk 成 f, i, g, o 四部分
+        self.fw_cells = nn.ModuleList()
+        self.bw_cells = nn.ModuleList()
+
+        for layer_idx in range(num_layers):
+            input_size = embed_dim if layer_idx == 0 else hidden_dim * 2
+
+            fw_gate = nn.Linear(input_size + hidden_dim, 4 * hidden_dim)
+            bw_gate = nn.Linear(input_size + hidden_dim, 4 * hidden_dim)
+
+            # 我们这里的门顺序是: f, i, g, o
+            # 所以前 hidden_dim 段对应 forget gate，可把 forget bias 设为 1.0
+            with torch.no_grad():
+                fw_gate.bias[:hidden_dim].fill_(1.0)
+                bw_gate.bias[:hidden_dim].fill_(1.0)
+
+            self.fw_cells.append(fw_gate)
+            self.bw_cells.append(bw_gate)
 
         # ---------- 已给出：分类头（在拿到 concat 后的句向量 h 后使用，形状为 batch × (2*hidden_dim)）---
         self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(hidden_dim * 2, num_classes)
+
+        # cell
+        def _lstm_cell(
+                self,
+                x_t: torch.Tensor,
+                state: Tuple[torch.Tensor, torch.Tensor],
+                gate_layer: nn.Linear,
+        ) -> Tuple[torch.Tensor, torch.Tensor]:
+            """
+            x_t:     (batch, input_size)
+            state:   (h_prev, c_prev)，每个都是 (batch, hidden_dim)
+            gate_layer: 一个 Linear(input_size + hidden_dim, 4*hidden_dim)
+            """
+            h_prev, c_prev = state
+
+            concat = torch.cat([h_prev, x_t], dim=-1)  # (batch, hidden+input)
+            gates_out = gate_layer(concat)  # (batch, 4*hidden)
+
+            # 门顺序：f, i, g, o
+            f_pre, i_pre, g_pre, o_pre = gates_out.chunk(4, dim=-1)
+
+            f_t = torch.sigmoid(f_pre)
+            i_t = torch.sigmoid(i_pre)
+            g_t = torch.tanh(g_pre)
+            o_t = torch.sigmoid(o_pre)
+
+            c_t = f_t * c_prev + i_t * g_t
+            h_t = o_t * torch.tanh(c_t)
+            return h_t, c_t
+
+        # 单向
+        def _run_one_direction(
+                self,
+                seq_inputs: torch.Tensor,
+                lengths: torch.Tensor,
+                gate_layer: nn.Linear,
+                reverse: bool = False,
+        ) -> Tuple[torch.Tensor, torch.Tensor]:
+            """
+            seq_inputs: (batch, seq_len, input_size)
+            lengths:    (batch,) 每个样本的真实长度（非 PAD 个数）
+            gate_layer: 当前层当前方向的门控 Linear
+            reverse:    是否反向扫描
+
+            返回:
+                outputs: (batch, seq_len, hidden_dim) 该方向每个时间步的输出
+                h_last:  (batch, hidden_dim) 该方向整句扫描后的最终隐状态
+            """
+            batch_size, seq_len, _ = seq_inputs.size()
+            device = seq_inputs.device
+            dtype = seq_inputs.dtype
+
+            h_t = torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
+            c_t = torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
+
+            outputs = [None] * seq_len
+            time_indices = range(seq_len - 1, -1, -1) if reverse else range(seq_len)
+
+            for t in time_indices:
+                x_t = seq_inputs[:, t, :]  # (batch, input_size)
+
+                h_new, c_new = self._lstm_cell(x_t, (h_t, c_t), gate_layer)
+
+                # 只在真实 token 位置更新；PAD 位置保持旧状态不变
+                valid_mask = (t < lengths).unsqueeze(1).to(dtype)  # (batch, 1)
+
+                h_t = valid_mask * h_new + (1.0 - valid_mask) * h_t
+                c_t = valid_mask * c_new + (1.0 - valid_mask) * c_t
+
+                outputs[t] = h_t.unsqueeze(1)  # 保持输出按原始时间顺序存放
+
+            outputs = torch.cat(outputs, dim=1)  # (batch, seq_len, hidden_dim)
+            return outputs, h_t
+
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -130,10 +224,39 @@ class BiLSTMClassifier(nn.Module):
         注意：「最后一步」在存在 PAD 时应对真实结束位置取隐状态，而不是固定取下标 max_len-1
         （若你暂时简化实现，也应在报告中说明）。
         """
-        raise NotImplementedError(
-            "请在本类中补全 __init__ 中 Bi-LSTM 相关参数 与 本 forward 的完整前向过程；"
-            "禁止使用 nn.LSTM 等封装的循环层，详见类内注释。"
-        )
+        # 真实长度：非 PAD token 数
+        lengths = (x != self.pad_idx).sum(dim=1)  # (batch,)
+
+        # 1) Embedding
+        layer_input = self.embedding(x)  # (batch, seq_len, embed_dim)
+
+        # 2) 双向、多层时序展开
+        for layer_idx in range(self.num_layers):
+            fw_outputs, fw_last = self._run_one_direction(
+                layer_input, lengths, self.fw_cells[layer_idx], reverse=False
+            )
+            bw_outputs, bw_last = self._run_one_direction(
+                layer_input, lengths, self.bw_cells[layer_idx], reverse=True
+            )
+
+            # 当前层双向输出，作为下一层输入
+            layer_input = torch.cat([fw_outputs, bw_outputs], dim=-1)  # (batch, seq_len, 2*hidden_dim)
+
+        # 3)
+        h = torch.cat([fw_last, bw_last], dim=1)  # (batch, 2*hidden_dim)
+
+        # 4) Dropout
+        h = self.dropout(h)
+
+        # 5) 分类 logits
+        logits = self.fc(h)  # (batch, num_classes)
+        return logits
+
+
+        #raise NotImplementedError(
+            #"请在本类中补全 __init__ 中 Bi-LSTM 相关参数 与 本 forward 的完整前向过程；"
+            #"禁止使用 nn.LSTM 等封装的循环层，详见类内注释。"
+        #)
 
 
 @torch.no_grad()
