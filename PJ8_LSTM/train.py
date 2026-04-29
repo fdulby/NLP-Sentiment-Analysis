@@ -134,78 +134,78 @@ class BiLSTMClassifier(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(hidden_dim * 2, num_classes)
 
-        # cell
-        def _lstm_cell(
-                self,
-                x_t: torch.Tensor,
-                state: Tuple[torch.Tensor, torch.Tensor],
-                gate_layer: nn.Linear,
-        ) -> Tuple[torch.Tensor, torch.Tensor]:
-            """
-            x_t:     (batch, input_size)
-            state:   (h_prev, c_prev)，每个都是 (batch, hidden_dim)
-            gate_layer: 一个 Linear(input_size + hidden_dim, 4*hidden_dim)
-            """
-            h_prev, c_prev = state
+    # cell
+    def _lstm_cell(
+            self,
+            x_t: torch.Tensor,
+            state: Tuple[torch.Tensor, torch.Tensor],
+            gate_layer: nn.Linear,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        x_t:     (batch, input_size)
+        state:   (h_prev, c_prev)，每个都是 (batch, hidden_dim)
+        gate_layer: 一个 Linear(input_size + hidden_dim, 4*hidden_dim)
+        """
+        h_prev, c_prev = state
 
-            concat = torch.cat([h_prev, x_t], dim=-1)  # (batch, hidden+input)
-            gates_out = gate_layer(concat)  # (batch, 4*hidden)
+        concat = torch.cat([h_prev, x_t], dim=-1)  # (batch, hidden+input)
+        gates_out = gate_layer(concat)  # (batch, 4*hidden)
 
-            # 门顺序：f, i, g, o
-            f_pre, i_pre, g_pre, o_pre = gates_out.chunk(4, dim=-1)
+        # 门顺序：f, i, g, o
+        f_pre, i_pre, g_pre, o_pre = gates_out.chunk(4, dim=-1)
 
-            f_t = torch.sigmoid(f_pre)
-            i_t = torch.sigmoid(i_pre)
-            g_t = torch.tanh(g_pre)
-            o_t = torch.sigmoid(o_pre)
+        f_t = torch.sigmoid(f_pre)
+        i_t = torch.sigmoid(i_pre)
+        g_t = torch.tanh(g_pre)
+        o_t = torch.sigmoid(o_pre)
 
-            c_t = f_t * c_prev + i_t * g_t
-            h_t = o_t * torch.tanh(c_t)
-            return h_t, c_t
+        c_t = f_t * c_prev + i_t * g_t
+        h_t = o_t * torch.tanh(c_t)
+        return h_t, c_t
 
-        # 单向
-        def _run_one_direction(
-                self,
-                seq_inputs: torch.Tensor,
-                lengths: torch.Tensor,
-                gate_layer: nn.Linear,
-                reverse: bool = False,
-        ) -> Tuple[torch.Tensor, torch.Tensor]:
-            """
-            seq_inputs: (batch, seq_len, input_size)
-            lengths:    (batch,) 每个样本的真实长度（非 PAD 个数）
-            gate_layer: 当前层当前方向的门控 Linear
-            reverse:    是否反向扫描
+    # 单向
+    def _run_one_direction(
+            self,
+            seq_inputs: torch.Tensor,
+            lengths: torch.Tensor,
+            gate_layer: nn.Linear,
+            reverse: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        seq_inputs: (batch, seq_len, input_size)
+        lengths:    (batch,) 每个样本的真实长度（非 PAD 个数）
+        gate_layer: 当前层当前方向的门控 Linear
+        reverse:    是否反向扫描
 
-            返回:
-                outputs: (batch, seq_len, hidden_dim) 该方向每个时间步的输出
-                h_last:  (batch, hidden_dim) 该方向整句扫描后的最终隐状态
-            """
-            batch_size, seq_len, _ = seq_inputs.size()
-            device = seq_inputs.device
-            dtype = seq_inputs.dtype
+        返回:
+            outputs: (batch, seq_len, hidden_dim) 该方向每个时间步的输出
+            h_last:  (batch, hidden_dim) 该方向整句扫描后的最终隐状态
+        """
+        batch_size, seq_len, _ = seq_inputs.size()
+        device = seq_inputs.device
+        dtype = seq_inputs.dtype
 
-            h_t = torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
-            c_t = torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
+        h_t = torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
+        c_t = torch.zeros(batch_size, self.hidden_dim, device=device, dtype=dtype)
 
-            outputs = [None] * seq_len
-            time_indices = range(seq_len - 1, -1, -1) if reverse else range(seq_len)
+        outputs = [None] * seq_len
+        time_indices = range(seq_len - 1, -1, -1) if reverse else range(seq_len)
 
-            for t in time_indices:
-                x_t = seq_inputs[:, t, :]  # (batch, input_size)
+        for t in time_indices:
+            x_t = seq_inputs[:, t, :]  # (batch, input_size)
 
-                h_new, c_new = self._lstm_cell(x_t, (h_t, c_t), gate_layer)
+            h_new, c_new = self._lstm_cell(x_t, (h_t, c_t), gate_layer)
 
-                # 只在真实 token 位置更新；PAD 位置保持旧状态不变
-                valid_mask = (t < lengths).unsqueeze(1).to(dtype)  # (batch, 1)
+            # 只在真实 token 位置更新；PAD 位置保持旧状态不变
+            valid_mask = (t < lengths).unsqueeze(1).to(dtype)  # (batch, 1)
 
-                h_t = valid_mask * h_new + (1.0 - valid_mask) * h_t
-                c_t = valid_mask * c_new + (1.0 - valid_mask) * c_t
+            h_t = valid_mask * h_new + (1.0 - valid_mask) * h_t
+            c_t = valid_mask * c_new + (1.0 - valid_mask) * c_t
 
-                outputs[t] = h_t.unsqueeze(1)  # 保持输出按原始时间顺序存放
+            outputs[t] = h_t.unsqueeze(1)  # 保持输出按原始时间顺序存放
 
-            outputs = torch.cat(outputs, dim=1)  # (batch, seq_len, hidden_dim)
-            return outputs, h_t
+        outputs = torch.cat(outputs, dim=1)  # (batch, seq_len, hidden_dim)
+        return outputs, h_t
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
