@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import jieba
 import json
 import os
-from model import SentimentLSTM
+from model_lby import SentimentLSTM
 
 #对于环境的配置
 config = {

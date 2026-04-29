@@ -4,8 +4,8 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import json
 import os
-from dataset import get_dataloader  # 导入逻辑
-from model import SentimentLSTM  # 导入模型
+from dataset_lby import get_dataloader  # 导入逻辑
+from model_lby import SentimentLSTM  # 导入模型
 
 #超参数
 config = {
