@@ -20,6 +20,7 @@ import torch.nn as nn
 from train import BiLSTMClassifier, get_device
 
 
+
 def text_to_ids(
     text: str,
     word2id: Dict[str, int],
