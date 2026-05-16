@@ -6,7 +6,6 @@
 - 使用 jieba 分词构建词表，保存为 vocab.json（含 <PAD>、<UNK>）
 """
 
-
 import os
 import json
 import jieba

@@ -2,7 +2,6 @@
 """
 Bi-LSTM 中文情感分析训练脚本。
 需先运行 prepare_data.py 生成 train.csv / test.csv / vocab.json。
-
 本文件中 BiLSTMClassifier 的循环部分需你自行补全，禁止使用 nn.LSTM 等；详见类内说明。
 predict.py 从本文件导入同一 BiLSTMClassifier，请勿在 predict 中再复制一份模型类。
 """

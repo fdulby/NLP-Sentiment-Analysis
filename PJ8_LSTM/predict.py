@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 加载 train.py 训练并保存的 checkpoint，对输入句子做情感预测（0=负向，1=正向）。
-
 说明：
   - 网络结构类 BiLSTMClassifier 与 train.py 中**共用**（见 `from train import ...`），请勿在本文件
     再复制一份模型类，以免与训练时 `state_dict` 键名不一致导致无法加载。
