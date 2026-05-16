@@ -1,0 +1,23 @@
+{
+  "label_map": {
+    "0": 0,
+    "1": 1
+  },
+  "label_names": [
+    "负向",
+    "正向"
+  ],
+  "num_classes": 2,
+  "label_distribution": {
+    "0": 7987,
+    "1": 4000
+  },
+  "train_size": 8390,
+  "val_size": 1798,
+  "test_size": 1799,
+  "vocab_size": 4322,
+  "min_freq": 2,
+  "train_ratio": 0.7,
+  "val_ratio": 0.15,
+  "test_ratio": 0.15
+}
