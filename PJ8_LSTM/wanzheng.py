@@ -80,10 +80,13 @@ CONFIG: Dict[str, Any] = {
     # 如果只想跑一组参数，保持空列表即可。
     # 如果想一次跑多组，可以这样写：
      "experiments": [
-         {"lr": 1e-3, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5},
-         {"lr": 5e-4, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5},
-         {"lr": 1e-4, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5},
-         {"lr": 5e-5, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5},
+         {"lr": 1e-3, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5,"num_layers": 1,"embed_dim": 128},
+         {"lr": 5e-4, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5,"num_layers": 1,"embed_dim": 128},
+         {"lr": 1e-4, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5,"num_layers": 1,"embed_dim": 128},
+         {"lr": 5e-5, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5,"num_layers": 1,"embed_dim": 128},
+         {"lr": 5e-4, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5,"num_layers": 1,"embed_dim": 64},
+         {"lr": 5e-4, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5,"num_layers": 2,"embed_dim": 128},
+         {"lr": 5e-4, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5,"num_layers": 2,"embed_dim": 64},
      ],
     #"experiments": [],
 }
