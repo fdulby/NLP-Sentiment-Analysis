@@ -46,8 +46,8 @@ except ImportError as exc:
 CONFIG: Dict[str, Any] = {
     # 数据相关
     "dataset_name": "XiangPan/waimai_10k",
-    "hf_cache_dir": None,  # 例如 "/data/liubingyi/hf_datasets_cache"
-    "processed_data_dir": "processed_data",
+    "hf_cache_dir": "/root/autodl-tmp/hf_datasets_cache",
+    "processed_data_dir": "/root/autodl-tmp/waimai_processed",
     "force_prepare": False,  # True: 每次都重新下载/划分；False: 已有数据则复用
     "train_ratio": 0.70,
     "val_ratio": 0.15,
@@ -79,11 +79,13 @@ CONFIG: Dict[str, Any] = {
 
     # 如果只想跑一组参数，保持空列表即可。
     # 如果想一次跑多组，可以这样写：
-    # "experiments": [
-    #     {"lr": 1e-3, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5},
-    #     {"lr": 5e-4, "batch_size": 64, "hidden_dim": 128, "dropout": 0.3},
-    # ],
-    "experiments": [],
+     "experiments": [
+         {"lr": 1e-3, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5},
+         {"lr": 5e-4, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5},
+         {"lr": 1e-4, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5},
+         {"lr": 5e-5, "batch_size": 64, "hidden_dim": 128, "dropout": 0.5},
+     ],
+    #"experiments": [],
 }
 # ====================================================================
 
