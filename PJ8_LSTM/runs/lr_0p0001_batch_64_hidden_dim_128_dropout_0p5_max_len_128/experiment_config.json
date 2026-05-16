@@ -1,0 +1,125 @@
+{
+  "run_name": "lr_0p0001_batch_64_hidden_dim_128_dropout_0p5_max_len_128",
+  "run_dir": "/tmp/pycharm_project_496/PJ8_LSTM/runs/lr_0p0001_batch_64_hidden_dim_128_dropout_0p5_max_len_128",
+  "device": "cuda",
+  "config": {
+    "dataset_name": "XiangPan/waimai_10k",
+    "hf_cache_dir": "/root/autodl-tmp/hf_datasets_cache",
+    "processed_data_dir": "processed_data",
+    "force_prepare": false,
+    "train_ratio": 0.7,
+    "val_ratio": 0.15,
+    "test_ratio": 0.15,
+    "min_freq": 2,
+    "label_names": [
+      "负向",
+      "正向"
+    ],
+    "output_root": "runs",
+    "run_name_keys": [
+      "lr",
+      "batch_size",
+      "hidden_dim",
+      "dropout",
+      "max_len"
+    ],
+    "seed": 42,
+    "max_len": 128,
+    "embed_dim": 128,
+    "hidden_dim": 128,
+    "num_layers": 1,
+    "dropout": 0.5,
+    "epochs": 15,
+    "batch_size": 64,
+    "lr": 0.0001,
+    "weight_decay": 0.0,
+    "grad_clip": 5.0,
+    "num_workers": 0
+  },
+  "data": {
+    "label_map": {
+      "0": 0,
+      "1": 1
+    },
+    "label_names": [
+      "负向",
+      "正向"
+    ],
+    "num_classes": 2,
+    "label_distribution": {
+      "0": 7987,
+      "1": 4000
+    },
+    "train_size": 8390,
+    "val_size": 1798,
+    "test_size": 1799,
+    "vocab_size": 4322,
+    "min_freq": 2,
+    "train_ratio": 0.7,
+    "val_ratio": 0.15,
+    "test_ratio": 0.15
+  },
+  "output_files": {
+    "best_model": "/tmp/pycharm_project_496/PJ8_LSTM/runs/lr_0p0001_batch_64_hidden_dim_128_dropout_0p5_max_len_128/best_model.pt",
+    "loss_curve": "/tmp/pycharm_project_496/PJ8_LSTM/runs/lr_0p0001_batch_64_hidden_dim_128_dropout_0p5_max_len_128/loss_curve.png",
+    "experiment_config": "/tmp/pycharm_project_496/PJ8_LSTM/runs/lr_0p0001_batch_64_hidden_dim_128_dropout_0p5_max_len_128/experiment_config.json",
+    "wrong_predictions": "/tmp/pycharm_project_496/PJ8_LSTM/runs/lr_0p0001_batch_64_hidden_dim_128_dropout_0p5_max_len_128/wrong_predictions.csv",
+    "confusion_matrix": "/tmp/pycharm_project_496/PJ8_LSTM/runs/lr_0p0001_batch_64_hidden_dim_128_dropout_0p5_max_len_128/confusion_matrix.png"
+  },
+  "best": {
+    "best_epoch": 10,
+    "best_val_loss": 0.3286896323302431,
+    "best_val_acc": 0.8832035595105673
+  },
+  "final_test": {
+    "test_loss": 0.34772466337634433,
+    "test_acc": 0.8727070594774875,
+    "wrong_count": 229,
+    "confusion_matrix": [
+      [
+        1126,
+        73
+      ],
+      [
+        156,
+        444
+      ]
+    ]
+  },
+  "loss_history": {
+    "train_loss": [
+      0.5911143074444849,
+      0.4377466226789181,
+      0.3757040602942047,
+      0.3468110616926073,
+      0.32640784666279643,
+      0.31314862322182135,
+      0.29901482570157145,
+      0.28484854667632886,
+      0.27363469482746966,
+      0.26083374298371914,
+      0.25402295083269316,
+      0.24031175684729975,
+      0.2350523514670894,
+      0.22411007281565978,
+      0.21276218400950653
+    ],
+    "val_loss": [
+      0.4952698575376271,
+      0.40465211384288463,
+      0.3745196010830405,
+      0.3587342767879881,
+      0.3481239485196993,
+      0.3440417792561057,
+      0.3345921077704403,
+      0.33175668236411054,
+      0.3305679898008754,
+      0.3286896323302431,
+      0.32817547452595663,
+      0.3273453004533908,
+      0.3286430300342891,
+      0.3246956784547502,
+      0.3310821074350127
+    ]
+  }
+}
