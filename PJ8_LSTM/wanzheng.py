@@ -47,7 +47,7 @@ CONFIG: Dict[str, Any] = {
     # 数据相关
     "dataset_name": "XiangPan/waimai_10k",
     "hf_cache_dir": "/root/autodl-tmp/hf_datasets_cache",
-    "processed_data_dir": "/root/autodl-tmp/waimai_processed",
+    "processed_data_dir": "processed_data",
     "force_prepare": False,  # True: 每次都重新下载/划分；False: 已有数据则复用
     "train_ratio": 0.70,
     "val_ratio": 0.15,
