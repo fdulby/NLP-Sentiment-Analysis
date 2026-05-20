@@ -1,127 +1,269 @@
 # -*- coding: utf-8 -*-
 """
-数据准备与预处理脚本
-- 从网络下载 waimai_10k 中文外卖评价情感数据集
-- 8:2 划分训练集与测试集，保存为 train.csv / test.csv（列：label, text）
-- 使用 jieba 分词构建词表，保存为 vocab.json（含 <PAD>、<UNK>）
+数据准备与预处理脚本（工程化改造版）
+- 参照 wanzheng.py 结构，支持 CONFIG 配置、三切分、缓存复用、元数据记录
+- 输出：train.csv / val.csv / test.csv / vocab.json / metadata.json
 """
 
 import os
 import json
+import random
+from collections import Counter
+from typing import Any, Dict, List, Tuple
+
 import jieba
 import pandas as pd
-from collections import Counter
 from sklearn.model_selection import train_test_split
 
-# 使用 HuggingFace datasets 下载 waimai_10k
 try:
     from datasets import load_dataset
 except ImportError:
     raise ImportError("请先安装: pip install datasets")
 
 
-# ========== 1. 从网络下载 waimai_10k 数据集 ==========
+# ============================== CONFIG ==============================
+# 所有可调整参数集中在这里
+CONFIG: Dict[str, Any] = {
+    # 数据相关
+    "dataset_name": "XiangPan/waimai_10k",
+    "hf_cache_dir": "./hf_datasets_cache",   # HuggingFace 本地缓存目录
+    "processed_data_dir": "processed_data",  # 输出目录
+    "force_prepare": False,  # True=强制重新生成；False=文件存在则直接复用
+    "train_ratio": 0.70,
+    "val_ratio": 0.15,
+    "test_ratio": 0.15,
+    "min_freq": 2,
+    "label_names": ["负向", "正向"],  # 与标签 0/1 对应
+    "seed": 42,
+}
+# ====================================================================
 
-def download_waimai_10k():
-    """
-    从 HuggingFace 下载 waimai_10k 数据集。
-    返回 pandas DataFrame，列为 label, text。
-    """
-    print("正在从 HuggingFace 下载 waimai_10k 数据集...")
-    ds = load_dataset("XiangPan/waimai_10k")
-    # 通常为 train split 或全量在 "train"
-    if "train" in ds:
-        data = ds["train"]
-    else:
-        # 若只有单一 split，取第一个
-        split_name = list(ds.keys())[0]
-        data = ds[split_name]
 
-    # 统一转为 pandas，列名可能为 review/label 或 text/label 等
-    df = data.to_pandas()
-    # 检测文本列：优先 review，其次 text, content, sentence
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+
+
+def dump_json(path: str, obj: Any) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+
+
+def read_json(path: str) -> Any:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    自动探测文本列与标签列，统一重命名为 text / label。
+    """
     text_candidates = ["review", "text", "content", "sentence", "review_content"]
     text_col = None
-    for c in text_candidates:
-        if c in df.columns:
-            text_col = c
+    for col in text_candidates:
+        if col in df.columns:
+            text_col = col
             break
     if text_col is None:
-        # 取第一个非 label 的列作为文本
-        for c in df.columns:
-            if c != "label" and df[c].dtype == object:
-                text_col = c
+        for col in df.columns:
+            if col != "label" and df[col].dtype == object:
+                text_col = col
                 break
     if text_col is None:
         raise ValueError(f"未找到文本列，当前列: {list(df.columns)}")
 
-    # 统一列名为 text, label
     df = df.rename(columns={text_col: "text"})
     if "label" not in df.columns:
-        label_candidates = [c for c in df.columns if "label" in c.lower() or c in ("label", "labels")]
-        if label_candidates:
-            df = df.rename(columns={label_candidates[0]: "label"})
-        else:
+        label_candidates = [
+            col for col in df.columns if "label" in col.lower() or col == "labels"
+        ]
+        if not label_candidates:
             raise ValueError(f"未找到标签列，当前列: {list(df.columns)}")
+        df = df.rename(columns={label_candidates[0]: "label"})
 
-    # 只保留 text, label
     df = df[["text", "label"]].copy()
     df["text"] = df["text"].astype(str).str.strip()
-    df = df[df["text"].str.len() > 0].dropna(subset=["text", "label"]).reset_index(drop=True)
+    df = df[df["text"].str.len() > 0].dropna(subset=["text", "label"])
+    return df.reset_index(drop=True)
 
-    # 标签统一为 0/1（原始可能为 0/1 或 1/2 或 -1/1）
-    labels = df["label"].unique()
-    if set(labels).issubset({0, 1}):
-        df["label"] = df["label"].astype(int)
-    elif set(labels).issubset({1, 2}):
-        df["label"] = (df["label"].astype(int) - 1)  # 1->0, 2->1
+
+def normalize_labels(df: pd.DataFrame, cfg: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    将原始标签统一为 0/1，保留 raw_label 列，并生成 metadata。
+    """
+    raw_labels = list(pd.unique(df["label"]))
+    if set(raw_labels).issubset({0, 1}):
+        label_map = {0: 0, 1: 1}
+    elif set(raw_labels).issubset({1, 2}):
+        label_map = {1: 0, 2: 1}
     else:
-        # 映射：较小/负的为 0，较大/正的为 1
-        sorted_labels = sorted(labels)
-        label_map = {v: i for i, v in enumerate(sorted_labels)}
-        df["label"] = df["label"].map(label_map)
+        sorted_labels = sorted(raw_labels)
+        label_map = {label: idx for idx, label in enumerate(sorted_labels)}
 
-    print(f"已加载 waimai_10k: 共 {len(df)} 条，标签分布: {df['label'].value_counts().to_dict()}")
+    df = df.copy()
+    df["raw_label"] = df["label"]
+    df["label"] = df["label"].map(label_map).astype(int)
+
+    num_classes = int(df["label"].nunique())
+    label_names = cfg["label_names"]
+    if len(label_names) != num_classes:
+        label_names = [str(i) for i in range(num_classes)]
+
+    meta = {
+        "label_map": {str(k): int(v) for k, v in label_map.items()},
+        "label_names": label_names,
+        "num_classes": num_classes,
+        "label_distribution": {
+            str(k): int(v) for k, v in df["label"].value_counts().sort_index().items()
+        },
+    }
+    return df, meta
+
+
+def download_dataset(cfg: Dict[str, Any]) -> pd.DataFrame:
+    """
+    从 HuggingFace 下载，合并所有 split，并保留 source_split 来源标记。
+    """
+    print(f"正在加载数据集: {cfg['dataset_name']}")
+    ds = load_dataset(cfg["dataset_name"], cache_dir=cfg["hf_cache_dir"])
+    frames = []
+    for split_name in ds.keys():
+        split_df = ds[split_name].to_pandas()
+        split_df["source_split"] = split_name
+        frames.append(split_df)
+    df = pd.concat(frames, ignore_index=True)
+    df = normalize_columns(df)
+    print(f"原始数据读取完成，共 {len(df)} 条")
     return df
 
 
-# ========== 2. 划分并保存 train.csv / test.csv，构建词表 vocab.json ==========
+def split_train_val_test(df: pd.DataFrame, cfg: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    按比例 7:1.5:1.5 分层划分为 train / val / test。
+    """
+    ratio_sum = cfg["train_ratio"] + cfg["val_ratio"] + cfg["test_ratio"]
+    if abs(ratio_sum - 1.0) > 1e-8:
+        raise ValueError("train_ratio + val_ratio + test_ratio 必须等于 1")
 
-def main():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    os.chdir(base_dir)
+    train_val_df, test_df = train_test_split(
+        df,
+        test_size=cfg["test_ratio"],
+        random_state=cfg["seed"],
+        stratify=df["label"],
+    )
+    val_size_in_train_val = cfg["val_ratio"] / (cfg["train_ratio"] + cfg["val_ratio"])
+    train_df, val_df = train_test_split(
+        train_val_df,
+        test_size=val_size_in_train_val,
+        random_state=cfg["seed"],
+        stratify=train_val_df["label"],
+    )
+    return (
+        train_df.reset_index(drop=True),
+        val_df.reset_index(drop=True),
+        test_df.reset_index(drop=True),
+    )
 
-    df = download_waimai_10k()
-    train_df, test_df = train_test_split(df, test_size=0.2, random_state=42, stratify=df["label"])
-    train_df = train_df.reset_index(drop=True)
-    test_df = test_df.reset_index(drop=True)
 
-    train_path = os.path.join(base_dir, "train.csv")
-    test_path = os.path.join(base_dir, "test.csv")
-    train_df.to_csv(train_path, index=False, encoding="utf-8")
-    test_df.to_csv(test_path, index=False, encoding="utf-8")
-    print(f"已保存: {train_path} ({len(train_df)} 条), {test_path} ({len(test_df)} 条)")
-
-    # ========== 3. 使用 jieba 分词，构建词表 ==========
+def build_vocab(train_df: pd.DataFrame, min_freq: int) -> Dict[str, int]:
+    """
+    仅基于训练集分词、统计词频、过滤低频词，构建 word2id。
+    """
     print("正在使用 jieba 对训练集分词并统计词频...")
-    all_tokens = []
+    all_tokens: List[str] = []
     for text in train_df["text"].astype(str):
         all_tokens.extend(jieba.lcut(text.strip()))
 
-    word_freq = Counter(w for w in all_tokens if w and w.strip())
-    min_freq = 2
-    vocab_words = [w for w, c in word_freq.items() if c >= min_freq]
+    word_freq = Counter(token for token in all_tokens if token and token.strip())
+    vocab_words = [word for word, count in word_freq.items() if count >= min_freq]
     vocab_words = sorted(vocab_words, key=lambda x: (-word_freq[x], x))
 
-    word2id = {"<PAD>": 0, "<UNK>": 1}
-    for i, w in enumerate(vocab_words):
-        word2id[w] = i + 2
+    word2id = {"<<PAD>": 0, "<UNK>": 1}
+    for idx, word in enumerate(vocab_words, start=2):
+        word2id[word] = idx
+    return word2id
 
-    vocab_path = os.path.join(base_dir, "vocab.json")
-    with open(vocab_path, "w", encoding="utf-8") as f:
-        json.dump(word2id, f, ensure_ascii=False, indent=2)
-    print(f"词表已保存: {vocab_path}，词表大小: {len(word2id)}")
-    print("数据准备完成。")
+
+def prepare_data(cfg: Dict[str, Any], base_dir: str) -> Dict[str, Any]:
+    """
+    主控函数：
+      1. 检查缓存文件是否存在，存在则直接复用；
+      2. 否则下载 → 清洗 → 划分 → 构建词表 → 保存全部产物。
+    返回字典，包含 paths / word2id / metadata，可直接被训练脚本消费。
+    """
+    data_dir = os.path.join(base_dir, cfg["processed_data_dir"])
+    os.makedirs(data_dir, exist_ok=True)
+
+    paths = {
+        "train_csv": os.path.join(data_dir, "train.csv"),
+        "val_csv": os.path.join(data_dir, "val.csv"),
+        "test_csv": os.path.join(data_dir, "test.csv"),
+        "vocab_json": os.path.join(data_dir, "vocab.json"),
+        "metadata_json": os.path.join(data_dir, "metadata.json"),
+    }
+
+    # 缓存复用逻辑
+    required_files = list(paths.values())
+    if not cfg["force_prepare"] and all(os.path.isfile(path) for path in required_files):
+        print(f"检测到已有处理后数据，直接复用: {data_dir}")
+        word2id = read_json(paths["vocab_json"])
+        metadata = read_json(paths["metadata_json"])
+        return {"paths": paths, "word2id": word2id, "metadata": metadata}
+
+    # 下载与清洗
+    df = download_dataset(cfg)
+    df, metadata = normalize_labels(df, cfg)
+
+    # 划分
+    train_df, val_df, test_df = split_train_val_test(df, cfg)
+
+    # 构建词表（仅基于训练集，防止泄漏）
+    word2id = build_vocab(train_df, cfg["min_freq"])
+
+    # 保存 CSV
+    train_df.to_csv(paths["train_csv"], index=False, encoding="utf-8")
+    val_df.to_csv(paths["val_csv"], index=False, encoding="utf-8")
+    test_df.to_csv(paths["test_csv"], index=False, encoding="utf-8")
+    dump_json(paths["vocab_json"], word2id)
+
+    # 更新并保存元数据
+    metadata.update({
+        "train_size": int(len(train_df)),
+        "val_size": int(len(val_df)),
+        "test_size": int(len(test_df)),
+        "vocab_size": int(len(word2id)),
+        "min_freq": cfg["min_freq"],
+        "train_ratio": cfg["train_ratio"],
+        "val_ratio": cfg["val_ratio"],
+        "test_ratio": cfg["test_ratio"],
+    })
+    dump_json(paths["metadata_json"], metadata)
+
+    print(
+        f"数据准备完成: "
+        f"train={len(train_df)}, val={len(val_df)}, test={len(test_df)}, "
+        f"vocab={len(word2id)}"
+    )
+    return {"paths": paths, "word2id": word2id, "metadata": metadata}
+
+
+def main() -> None:
+    set_seed(CONFIG["seed"])
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(base_dir)
+
+    data_info = prepare_data(CONFIG, base_dir)
+
+    # 打印摘要
+    meta = data_info["metadata"]
+    print("\n===== 数据准备结果 =====")
+    print(f"训练集: {meta['train_size']} 条")
+    print(f"验证集: {meta['val_size']} 条")
+    print(f"测试集: {meta['test_size']} 条")
+    print(f"词表大小: {meta['vocab_size']}")
+    print(f"标签映射: {meta['label_map']}")
+    print(f"标签名称: {meta['label_names']}")
+    print(f"标签分布: {meta['label_distribution']}")
+    print("========================")
 
 
 if __name__ == "__main__":
