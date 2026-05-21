@@ -59,7 +59,7 @@ CONFIG: Dict[str, Any] = {
     "dropout": 0.5,
 
     # 训练超参数
-    "epochs": 20,
+    "epochs": 30,
     "batch_size": 64,
     "lr": 5e-4,
     "weight_decay": 1e-4,
@@ -72,13 +72,33 @@ CONFIG: Dict[str, Any] = {
     # 类别名称：None 表示优先读 metadata.json；如果没有 metadata，则自动按 label 数量生成。
     "label_names": None,
 
-    # 批量实验：为空时只跑上面的默认配置；想批量测试时，在这里写多组覆盖项。
-    # 例如：
-    # "experiments": [
-    #     {"lr": 1e-3, "dropout": 0.5},
-    #     {"lr": 5e-4, "dropout": 0.3},
-    # ],
-    "experiments": [],
+    # 批量实验：每组只写相对默认 CONFIG 需要覆盖的超参数。
+    "experiments": [
+        {"lr": 5e-4, "dropout": 0.5, "hidden_dim": 16, "embed_dim": 32},
+        {"lr": 5e-4, "dropout": 0.5, "hidden_dim": 16, "embed_dim": 64},
+        {"lr": 5e-4, "dropout": 0.5, "hidden_dim": 32, "embed_dim": 32},
+        {"lr": 5e-4, "dropout": 0.5, "hidden_dim": 32, "embed_dim": 64},
+        {"lr": 5e-4, "dropout": 0.7, "hidden_dim": 16, "embed_dim": 32},
+        {"lr": 5e-4, "dropout": 0.7, "hidden_dim": 16, "embed_dim": 64},
+        {"lr": 5e-4, "dropout": 0.7, "hidden_dim": 32, "embed_dim": 32},
+        {"lr": 5e-4, "dropout": 0.7, "hidden_dim": 32, "embed_dim": 64},
+        {"lr": 1e-4, "dropout": 0.5, "hidden_dim": 16, "embed_dim": 32},
+        {"lr": 1e-4, "dropout": 0.5, "hidden_dim": 16, "embed_dim": 64},
+        {"lr": 1e-4, "dropout": 0.5, "hidden_dim": 32, "embed_dim": 32},
+        {"lr": 1e-4, "dropout": 0.5, "hidden_dim": 32, "embed_dim": 64},
+        {"lr": 1e-4, "dropout": 0.7, "hidden_dim": 16, "embed_dim": 32},
+        {"lr": 1e-4, "dropout": 0.7, "hidden_dim": 16, "embed_dim": 64},
+        {"lr": 1e-4, "dropout": 0.7, "hidden_dim": 32, "embed_dim": 32},
+        {"lr": 1e-4, "dropout": 0.7, "hidden_dim": 32, "embed_dim": 64},
+        {"lr": 5e-5, "dropout": 0.5, "hidden_dim": 16, "embed_dim": 32},
+        {"lr": 5e-5, "dropout": 0.5, "hidden_dim": 16, "embed_dim": 64},
+        {"lr": 5e-5, "dropout": 0.5, "hidden_dim": 32, "embed_dim": 32},
+        {"lr": 5e-5, "dropout": 0.5, "hidden_dim": 32, "embed_dim": 64},
+        {"lr": 5e-5, "dropout": 0.7, "hidden_dim": 16, "embed_dim": 32},
+        {"lr": 5e-5, "dropout": 0.7, "hidden_dim": 16, "embed_dim": 64},
+        {"lr": 5e-5, "dropout": 0.7, "hidden_dim": 32, "embed_dim": 32},
+        {"lr": 5e-5, "dropout": 0.7, "hidden_dim": 32, "embed_dim": 64},
+    ],
 }
 # ====================================================================
 
