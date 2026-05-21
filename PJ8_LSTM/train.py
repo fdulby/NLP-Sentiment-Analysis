@@ -25,7 +25,6 @@ from torch.utils.data import DataLoader, Dataset
 
 
 # ============================== CONFIG ==============================
-# 你主要改这里。所有数据默认从 processed_data 读取，所有实验输出默认写入 runs。
 CONFIG: Dict[str, Any] = {
     # 数据文件
     "processed_data_dir": "processed_data",
@@ -52,13 +51,13 @@ CONFIG: Dict[str, Any] = {
 
     # 模型超参数
     "max_len": 128,
-    "embed_dim": 128,
+    "embed_dim": 64,
     "hidden_dim": 128,
     "num_layers": 1,
     "dropout": 0.5,
 
     # 训练超参数
-    "epochs": 10,
+    "epochs": 30,
     "batch_size": 64,
     "lr": 1e-3,
     "weight_decay": 0.0,
