@@ -49,7 +49,7 @@ CONFIG: Dict[str, Any] = {
     "num_filters": 128,
     "filter_sizes": [3, 4, 5],
     "dropout": 0.5,
-    "epochs": 20,
+    "epochs": 30,
     "batch_size": 64,
     "lr": 5e-4,
     "weight_decay": 1e-4,
