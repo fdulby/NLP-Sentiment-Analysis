@@ -15,11 +15,6 @@ import jieba
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-try:
-    from datasets import load_dataset
-except ImportError:
-    raise ImportError("请先安装: pip install datasets")
-
 
 # ============================== CONFIG ==============================
 # 所有可调整参数集中在这里
@@ -123,6 +118,11 @@ def download_dataset(cfg: Dict[str, Any]) -> pd.DataFrame:
     """
     从 HuggingFace 下载，合并所有 split，并保留 source_split 来源标记。
     """
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        raise ImportError("请先安装: pip install datasets")
+
     print(f"正在加载数据集: {cfg['dataset_name']}")
     ds = load_dataset(cfg["dataset_name"], cache_dir=cfg["hf_cache_dir"])
     frames = []
@@ -177,10 +177,37 @@ def build_vocab(train_df: pd.DataFrame, min_freq: int) -> Dict[str, int]:
     vocab_words = [word for word, count in word_freq.items() if count >= min_freq]
     vocab_words = sorted(vocab_words, key=lambda x: (-word_freq[x], x))
 
-    word2id = {"<<PAD>": 0, "<UNK>": 1}
+    word2id = {"<PAD>": 0, "<UNK>": 1}
     for idx, word in enumerate(vocab_words, start=2):
         word2id[word] = idx
     return word2id
+
+
+def processed_data_is_complete(paths: Dict[str, str]) -> bool:
+    """
+    已处理数据完整时直接复用，不下载、不划分、不重建词表。
+    """
+    required_files = list(paths.values())
+    if not all(os.path.isfile(path) for path in required_files):
+        return False
+
+    try:
+        for split_name in ("train_csv", "val_csv", "test_csv"):
+            df = pd.read_csv(paths[split_name], nrows=1)
+            if not {"text", "label"}.issubset(df.columns):
+                return False
+
+        word2id = read_json(paths["vocab_json"])
+        metadata = read_json(paths["metadata_json"])
+        if "<PAD>" not in word2id or "<UNK>" not in word2id:
+            return False
+        required_meta_keys = {"train_size", "val_size", "test_size", "vocab_size", "num_classes"}
+        if not required_meta_keys.issubset(metadata.keys()):
+            return False
+    except Exception:
+        return False
+
+    return True
 
 
 def prepare_data(cfg: Dict[str, Any], base_dir: str) -> Dict[str, Any]:
@@ -201,9 +228,8 @@ def prepare_data(cfg: Dict[str, Any], base_dir: str) -> Dict[str, Any]:
         "metadata_json": os.path.join(data_dir, "metadata.json"),
     }
 
-    # 缓存复用逻辑
-    required_files = list(paths.values())
-    if not cfg["force_prepare"] and all(os.path.isfile(path) for path in required_files):
+    # 缓存复用逻辑：processed_data 完整时直接跳过准备流程。
+    if not cfg["force_prepare"] and processed_data_is_complete(paths):
         print(f"检测到已有处理后数据，直接复用: {data_dir}")
         word2id = read_json(paths["vocab_json"])
         metadata = read_json(paths["metadata_json"])
