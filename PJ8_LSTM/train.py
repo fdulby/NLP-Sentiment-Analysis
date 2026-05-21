@@ -1,22 +1,83 @@
 # -*- coding: utf-8 -*-
 """
 Bi-LSTM 中文情感分析训练脚本。
-需先运行 prepare_data.py 生成 train.csv / test.csv / vocab.json。
+需先运行 prepare_data.py 生成 processed_data/train.csv / val.csv / test.csv / vocab.json。
 本文件中 BiLSTMClassifier 的循环部分需你自行补全，禁止使用 nn.LSTM 等；详见类内说明。
 predict.py 从本文件导入同一 BiLSTMClassifier，请勿在 predict 中再复制一份模型类。
 """
 
-import argparse
+import copy
 import json
 import os
 import random
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import jieba
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 import torch.nn as nn
+from sklearn.metrics import accuracy_score, confusion_matrix
 from torch.utils.data import DataLoader, Dataset
+
+
+# ============================== CONFIG ==============================
+# 你主要改这里。所有数据默认从 processed_data 读取，所有实验输出默认写入 runs。
+CONFIG: Dict[str, Any] = {
+    # 数据文件
+    "processed_data_dir": "processed_data",
+    "train_file": "train.csv",
+    "val_file": "val.csv",
+    "test_file": "test.csv",
+    "vocab_file": "vocab.json",
+    "metadata_file": "metadata.json",
+
+    # 输出目录
+    "output_root": "runs",
+    "run_name_keys": [
+        "lr",
+        "batch_size",
+        "hidden_dim",
+        "dropout",
+        "max_len",
+        "num_layers",
+        "embed_dim",
+    ],
+
+    # 随机性
+    "seed": 42,
+
+    # 模型超参数
+    "max_len": 128,
+    "embed_dim": 128,
+    "hidden_dim": 128,
+    "num_layers": 1,
+    "dropout": 0.5,
+
+    # 训练超参数
+    "epochs": 10,
+    "batch_size": 64,
+    "lr": 1e-3,
+    "weight_decay": 0.0,
+    "grad_clip": 5.0,
+    "num_workers": 0,
+
+    # 类别名称：None 表示优先读 metadata.json；如果没有 metadata，则自动按 label 数量生成。
+    "label_names": None,
+
+    # 批量实验：为空时只跑上面的默认配置；想批量测试时，在这里写多组覆盖项。
+    # 例如：
+    # "experiments": [
+    #     {"lr": 1e-3, "dropout": 0.5},
+    #     {"lr": 5e-4, "dropout": 0.3},
+    # ],
+    "experiments": [],
+}
+# ====================================================================
+
 
 # 复现实验的随机性（DataLoader 外仍有不确定因素时，可再设 torch.backends 等）
 def set_seed(seed: int = 42) -> None:
@@ -29,6 +90,16 @@ def set_seed(seed: int = 42) -> None:
 def load_vocab(vocab_path: str) -> Dict[str, int]:
     with open(vocab_path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def read_json(path: str) -> Any:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def dump_json(path: str, obj: Any) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
 
 
 class WaimaiDataset(Dataset):
@@ -262,21 +333,41 @@ def evaluate(
     model: nn.Module,
     loader: DataLoader,
     device: torch.device,
-) -> Tuple[float, float]:
+    criterion: nn.Module,
+) -> Dict[str, Any]:
     model.eval()
-    correct = 0
     total = 0
     loss_sum = 0.0
-    crit = nn.CrossEntropyLoss()
+    all_true: List[int] = []
+    all_pred: List[int] = []
+    all_prob: List[List[float]] = []
+    all_indices: List[int] = []
+    offset = 0
+
     for x, y in loader:
         x, y = x.to(device), y.to(device)
         logits = model(x)
-        loss = crit(logits, y)
-        loss_sum += loss.item() * y.size(0)
+        loss = criterion(logits, y)
+        prob = torch.softmax(logits, dim=1)
         pred = logits.argmax(dim=1)
-        correct += (pred == y).sum().item()
-        total += y.size(0)
-    return loss_sum / max(total, 1), correct / max(total, 1)
+
+        batch_size = y.size(0)
+        loss_sum += loss.item() * y.size(0)
+        total += batch_size
+        all_true.extend(y.cpu().tolist())
+        all_pred.extend(pred.cpu().tolist())
+        all_prob.extend(prob.cpu().tolist())
+        all_indices.extend(range(offset, offset + batch_size))
+        offset += batch_size
+
+    return {
+        "loss": loss_sum / max(total, 1),
+        "acc": accuracy_score(all_true, all_pred) if all_true else 0.0,
+        "true": all_true,
+        "pred": all_pred,
+        "prob": all_prob,
+        "indices": all_indices,
+    }
 
 
 def get_device() -> torch.device:
@@ -293,6 +384,7 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: torch.device,
+    grad_clip: float = 0.0,
 ) -> float:
     model.train()
     total_loss = 0.0
@@ -303,88 +395,358 @@ def train_one_epoch(
         logits = model(x)
         loss = criterion(logits, y)
         loss.backward()
+        if grad_clip and grad_clip > 0:
+            nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
         total_loss += loss.item() * y.size(0)
         n += y.size(0)
     return total_loss / max(n, 1)
 
 
-def main() -> None:
-    base = os.path.dirname(os.path.abspath(__file__))
-    os.chdir(base)
+def format_value_for_name(value: Any) -> str:
+    text = str(value)
+    return text.replace(".", "p").replace("-", "m").replace("/", "_")
 
-    p = argparse.ArgumentParser(description="Bi-LSTM 情感分析训练")
-    p.add_argument("--train_csv", type=str, default="train.csv")
-    p.add_argument("--test_csv", type=str, default="test.csv")
-    p.add_argument("--vocab", type=str, default="vocab.json")
-    p.add_argument("--save", type=str, default="model_best.pt")
-    p.add_argument("--epochs", type=int, default=10)
-    p.add_argument("--batch_size", type=int, default=64)
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--max_len", type=int, default=128)
-    p.add_argument("--embed_dim", type=int, default=128)
-    p.add_argument("--hidden_dim", type=int, default=128)
-    p.add_argument("--num_layers", type=int, default=1)
-    p.add_argument("--dropout", type=float, default=0.5)
-    p.add_argument("--seed", type=int, default=42)
-    args = p.parse_args()
 
-    for path in (args.train_csv, args.test_csv, args.vocab):
+def make_run_name(cfg: Dict[str, Any]) -> str:
+    parts = []
+    for key in cfg["run_name_keys"]:
+        parts.append(f"{key}_{format_value_for_name(cfg[key])}")
+    return "_".join(parts)
+
+
+def make_experiment_configs(base_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    experiments = base_cfg.get("experiments") or [{}]
+    configs: List[Dict[str, Any]] = []
+    for overrides in experiments:
+        cfg = copy.deepcopy(base_cfg)
+        cfg.pop("experiments", None)
+        cfg.update(overrides)
+        configs.append(cfg)
+    return configs
+
+
+def build_data_info(cfg: Dict[str, Any], base_dir: str) -> Dict[str, Any]:
+    data_dir = os.path.join(base_dir, cfg["processed_data_dir"])
+    paths = {
+        "train_csv": os.path.join(data_dir, cfg["train_file"]),
+        "val_csv": os.path.join(data_dir, cfg["val_file"]),
+        "test_csv": os.path.join(data_dir, cfg["test_file"]),
+        "vocab_json": os.path.join(data_dir, cfg["vocab_file"]),
+        "metadata_json": os.path.join(data_dir, cfg["metadata_file"]),
+    }
+
+    required_paths = [paths["train_csv"], paths["val_csv"], paths["test_csv"], paths["vocab_json"]]
+    for path in required_paths:
         if not os.path.isfile(path):
             raise FileNotFoundError(f"缺少文件: {path}，请先运行 prepare_data.py")
 
-    set_seed(args.seed)
-    device = get_device()
-    print("设备:", device)
+    metadata = read_json(paths["metadata_json"]) if os.path.isfile(paths["metadata_json"]) else {}
+    word2id = load_vocab(paths["vocab_json"])
 
-    word2id = load_vocab(args.vocab)
-    vocab_size = len(word2id)
+    label_values = set()
+    for split_path in (paths["train_csv"], paths["val_csv"], paths["test_csv"]):
+        df = pd.read_csv(split_path, usecols=["label"])
+        label_values.update(int(v) for v in df["label"].dropna().unique().tolist())
+    labels = sorted(label_values)
+    if not labels:
+        raise ValueError("未在 processed_data 的 CSV 文件中找到 label。")
+    if labels != list(range(len(labels))):
+        raise ValueError(f"label 必须从 0 连续编号，当前标签为: {labels}")
+
+    num_classes = max(int(metadata.get("num_classes", len(labels))), len(labels))
+    label_names = cfg.get("label_names") or metadata.get("label_names")
+    if not label_names or len(label_names) != num_classes:
+        label_names = [f"class_{idx}" for idx in range(num_classes)]
+
+    metadata.update(
+        {
+            "num_classes": num_classes,
+            "label_names": label_names,
+            "detected_labels": labels,
+        }
+    )
+    return {
+        "paths": paths,
+        "word2id": word2id,
+        "metadata": metadata,
+    }
+
+
+def create_loaders(data_info: Dict[str, Any], cfg: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    word2id = data_info["word2id"]
+    paths = data_info["paths"]
+    train_set = WaimaiDataset(paths["train_csv"], word2id, cfg["max_len"])
+    val_set = WaimaiDataset(paths["val_csv"], word2id, cfg["max_len"])
+    test_set = WaimaiDataset(paths["test_csv"], word2id, cfg["max_len"])
+
+    loader_kwargs = {
+        "batch_size": cfg["batch_size"],
+        "num_workers": cfg["num_workers"],
+    }
+    train_loader = DataLoader(train_set, shuffle=True, **loader_kwargs)
+    val_loader = DataLoader(val_set, shuffle=False, **loader_kwargs)
+    test_loader = DataLoader(test_set, shuffle=False, **loader_kwargs)
+    return train_loader, val_loader, test_loader
+
+
+def plot_loss_curve(train_losses: List[float], val_losses: List[float], save_path: str) -> None:
+    epochs = list(range(1, len(train_losses) + 1))
+    plt.figure(figsize=(8, 5))
+    plt.plot(epochs, train_losses, marker="o", label="train_loss")
+    plt.plot(epochs, val_losses, marker="o", label="val_loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Average Loss")
+    plt.title("Train / Val Loss")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=200)
+    plt.close()
+
+
+def plot_confusion_matrix(
+    y_true: List[int],
+    y_pred: List[int],
+    label_names: List[str],
+    save_path: str,
+) -> List[List[int]]:
+    labels = list(range(len(label_names)))
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+
+    plt.figure(figsize=(6, 5))
+    plt.imshow(cm, interpolation="nearest", cmap="Blues")
+    plt.title("Test Confusion Matrix")
+    plt.colorbar()
+    tick_marks = list(range(len(label_names)))
+    plt.xticks(tick_marks, label_names)
+    plt.yticks(tick_marks, label_names)
+    plt.xlabel("Predicted Label")
+    plt.ylabel("True Label")
+
+    threshold = cm.max() / 2.0 if cm.size > 0 and cm.max() > 0 else 0.0
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            color = "white" if cm[i, j] > threshold else "black"
+            plt.text(j, i, str(cm[i, j]), ha="center", va="center", color=color)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=200)
+    plt.close()
+    return cm.tolist()
+
+
+def save_wrong_predictions(
+    test_csv: str,
+    eval_result: Dict[str, Any],
+    label_names: List[str],
+    save_path: str,
+) -> int:
+    test_df = pd.read_csv(test_csv)
+    rows = []
+    for idx, true_label, pred_label, prob in zip(
+        eval_result["indices"],
+        eval_result["true"],
+        eval_result["pred"],
+        eval_result["prob"],
+    ):
+        if true_label == pred_label:
+            continue
+        row = test_df.iloc[int(idx)].to_dict()
+        row["true_label"] = int(true_label)
+        row["true_name"] = label_names[int(true_label)]
+        row["pred_label"] = int(pred_label)
+        row["pred_name"] = label_names[int(pred_label)]
+        for class_idx, class_prob in enumerate(prob):
+            row[f"prob_{class_idx}_{label_names[class_idx]}"] = float(class_prob)
+        rows.append(row)
+
+    wrong_df = pd.DataFrame(rows)
+    wrong_df.to_csv(save_path, index=False, encoding="utf-8-sig")
+    return len(wrong_df)
+
+
+def run_one_experiment(cfg: Dict[str, Any], data_info: Dict[str, Any], base_dir: str) -> Dict[str, Any]:
+    set_seed(cfg["seed"])
+    device = get_device()
+    run_name = make_run_name(cfg)
+    run_dir = os.path.join(base_dir, cfg["output_root"], run_name)
+    os.makedirs(run_dir, exist_ok=True)
+
+    paths = {
+        "best_model": os.path.join(run_dir, "best_model.pt"),
+        "loss_curve": os.path.join(run_dir, "loss_curve.png"),
+        "confusion_matrix": os.path.join(run_dir, "confusion_matrix.png"),
+        "experiment_config": os.path.join(run_dir, "experiment_config.json"),
+        "wrong_predictions": os.path.join(run_dir, "wrong_predictions.csv"),
+    }
+
+    word2id = data_info["word2id"]
+    metadata = data_info["metadata"]
+    label_names = metadata["label_names"]
+    num_classes = int(metadata["num_classes"])
     pad_idx = word2id.get("<PAD>", 0)
 
-    train_set = WaimaiDataset(args.train_csv, word2id, args.max_len)
-    test_set = WaimaiDataset(args.test_csv, word2id, args.max_len)
-    train_loader = DataLoader(
-        train_set, batch_size=args.batch_size, shuffle=True, num_workers=0
-    )
-    test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, num_workers=0)
+    config_payload = {
+        "run_name": run_name,
+        "run_dir": run_dir,
+        "device": str(device),
+        "config": cfg,
+        "data": metadata,
+        "output_files": paths,
+    }
+    dump_json(paths["experiment_config"], config_payload)
 
+    train_loader, val_loader, test_loader = create_loaders(data_info, cfg)
     model = BiLSTMClassifier(
-        vocab_size=vocab_size,
-        embed_dim=args.embed_dim,
-        hidden_dim=args.hidden_dim,
-        num_layers=args.num_layers,
-        num_classes=2,
-        dropout=args.dropout,
+        vocab_size=len(word2id),
+        embed_dim=cfg["embed_dim"],
+        hidden_dim=cfg["hidden_dim"],
+        num_layers=cfg["num_layers"],
+        num_classes=num_classes,
+        dropout=cfg["dropout"],
         pad_idx=pad_idx,
     ).to(device)
-    crit = nn.CrossEntropyLoss()
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=cfg["lr"],
+        weight_decay=cfg["weight_decay"],
+    )
 
-    best_acc = 0.0
-    for epoch in range(1, args.epochs + 1):
-        tr_loss = train_one_epoch(model, train_loader, opt, crit, device)
-        te_loss, te_acc = evaluate(model, test_loader, device)
-        print(
-            f"Epoch {epoch:3d} | train_loss: {tr_loss:.4f} | "
-            f"test_loss: {te_loss:.4f} | test_acc: {te_acc:.4f}"
+    best_val_acc = -1.0
+    best_val_loss = float("inf")
+    best_epoch = 0
+    train_losses: List[float] = []
+    val_losses: List[float] = []
+
+    print(f"\n开始实验: {run_name}")
+    print(f"设备: {device}")
+    print(f"结果目录: {run_dir}")
+
+    for epoch in range(1, cfg["epochs"] + 1):
+        train_loss = train_one_epoch(
+            model=model,
+            loader=train_loader,
+            optimizer=optimizer,
+            criterion=criterion,
+            device=device,
+            grad_clip=cfg["grad_clip"],
         )
-        if te_acc >= best_acc:
-            best_acc = te_acc
-            payload = {
-                "state_dict": model.state_dict(),
-                "word2id": word2id,
-                "hparams": {
-                    "embed_dim": args.embed_dim,
-                    "hidden_dim": args.hidden_dim,
-                    "num_layers": args.num_layers,
-                    "dropout": args.dropout,
-                    "max_len": args.max_len,
-                },
-            }
-            torch.save(payload, args.save)
-            print(f"  -> 已保存更优模型 (test_acc={te_acc:.4f}) 至 {args.save}")
+        val_result = evaluate(model, val_loader, device, criterion)
+        val_loss = float(val_result["loss"])
+        val_acc = float(val_result["acc"])
+        train_losses.append(float(train_loss))
+        val_losses.append(val_loss)
 
-    print(f"训练结束。最佳测试集准确率: {best_acc:.4f}，模型: {args.save}")
+        is_better = val_acc > best_val_acc or (
+            abs(val_acc - best_val_acc) < 1e-12 and val_loss < best_val_loss
+        )
+        if is_better:
+            best_val_acc = val_acc
+            best_val_loss = val_loss
+            best_epoch = epoch
+            torch.save(
+                {
+                    "state_dict": model.state_dict(),
+                    "word2id": word2id,
+                    "hparams": {
+                        "max_len": cfg["max_len"],
+                        "embed_dim": cfg["embed_dim"],
+                        "hidden_dim": cfg["hidden_dim"],
+                        "num_layers": cfg["num_layers"],
+                        "dropout": cfg["dropout"],
+                        "num_classes": num_classes,
+                        "pad_idx": pad_idx,
+                    },
+                    "label_names": label_names,
+                    "best_epoch": best_epoch,
+                    "best_val_loss": best_val_loss,
+                    "best_val_acc": best_val_acc,
+                    "config": cfg,
+                },
+                paths["best_model"],
+            )
+
+        print(
+            f"Epoch {epoch:03d} | "
+            f"train_loss={train_loss:.4f} | "
+            f"val_loss={val_loss:.4f} | "
+            f"val_acc={val_acc:.4f} | "
+            f"best_epoch={best_epoch}"
+        )
+
+    plot_loss_curve(train_losses, val_losses, paths["loss_curve"])
+
+    checkpoint = torch.load(paths["best_model"], map_location=device)
+    model.load_state_dict(checkpoint["state_dict"])
+    test_result = evaluate(model, test_loader, device, criterion)
+    test_loss = float(test_result["loss"])
+    test_acc = float(test_result["acc"])
+    wrong_count = save_wrong_predictions(
+        test_csv=data_info["paths"]["test_csv"],
+        eval_result=test_result,
+        label_names=label_names,
+        save_path=paths["wrong_predictions"],
+    )
+    cm = plot_confusion_matrix(
+        y_true=test_result["true"],
+        y_pred=test_result["pred"],
+        label_names=label_names,
+        save_path=paths["confusion_matrix"],
+    )
+
+    config_payload.update(
+        {
+            "best": {
+                "best_epoch": best_epoch,
+                "best_val_loss": best_val_loss,
+                "best_val_acc": best_val_acc,
+            },
+            "final_test": {
+                "test_loss": test_loss,
+                "test_acc": test_acc,
+                "wrong_count": wrong_count,
+                "confusion_matrix": cm,
+            },
+            "loss_history": {
+                "train_loss": train_losses,
+                "val_loss": val_losses,
+            },
+        }
+    )
+    dump_json(paths["experiment_config"], config_payload)
+
+    print(
+        f"实验完成: {run_name} | "
+        f"best_val_acc={best_val_acc:.4f} | "
+        f"test_acc={test_acc:.4f} | "
+        f"错误样本数={wrong_count}"
+    )
+    return config_payload
+
+
+def main() -> None:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(base_dir)
+
+    data_info = build_data_info(CONFIG, base_dir)
+    experiment_configs = make_experiment_configs(CONFIG)
+
+    summaries = []
+    for cfg in experiment_configs:
+        summaries.append(run_one_experiment(cfg, data_info, base_dir))
+
+    print("\n全部实验完成。")
+    for summary in summaries:
+        best = summary["best"]
+        final_test = summary["final_test"]
+        print(
+            f"{summary['run_name']} | "
+            f"best_val_acc={best['best_val_acc']:.4f} | "
+            f"test_acc={final_test['test_acc']:.4f} | "
+            f"run_dir={summary['run_dir']}"
+        )
 
 
 if __name__ == "__main__":
