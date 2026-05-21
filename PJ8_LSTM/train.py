@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 import torch.nn as nn
-from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.metrics import accuracy_score, average_precision_score, confusion_matrix, f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -52,17 +52,17 @@ CONFIG: Dict[str, Any] = {
     "seed": 42,
 
     # 模型超参数
-    "max_len": 128,
+    "max_len": 64,
     "embed_dim": 64,
-    "hidden_dim": 128,
+    "hidden_dim": 64,
     "num_layers": 1,
     "dropout": 0.5,
 
     # 训练超参数
-    "epochs": 30,
+    "epochs": 20,
     "batch_size": 64,
-    "lr": 1e-3,
-    "weight_decay": 0.0,
+    "lr": 5e-4,
+    "weight_decay": 1e-4,
     "grad_clip": 5.0,
     "num_workers": 0,
     "early_stopping_patience": 4,
@@ -526,50 +526,130 @@ def is_validation_better(
     return False
 
 
-def plot_loss_curve(train_losses: List[float], val_losses: List[float], save_path: str) -> None:
-    epochs = list(range(1, len(train_losses) + 1))
-    plt.figure(figsize=(8, 5))
-    plt.plot(epochs, train_losses, marker="o", label="train_loss")
-    plt.plot(epochs, val_losses, marker="o", label="val_loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Average Loss")
-    plt.title("Train / Val Loss")
-    plt.grid(True, linestyle="--", alpha=0.4)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=200)
-    plt.close()
-
-
-def plot_confusion_matrix(
-    y_true: List[int],
-    y_pred: List[int],
-    label_names: List[str],
-    save_path: str,
-) -> List[List[int]]:
+def build_test_summary(eval_result: Dict[str, Any], label_names: List[str]) -> Dict[str, Any]:
+    y_true = eval_result["true"]
+    y_pred = eval_result["pred"]
+    y_prob = eval_result["prob"]
     labels = list(range(len(label_names)))
     cm = confusion_matrix(y_true, y_pred, labels=labels)
+    prob_pos = [row[1] for row in y_prob] if y_prob and len(y_prob[0]) > 1 else y_pred
 
-    plt.figure(figsize=(6, 5))
-    plt.imshow(cm, interpolation="nearest", cmap="Blues")
-    plt.title("Test Confusion Matrix")
-    plt.colorbar()
-    tick_marks = list(range(len(label_names)))
-    plt.xticks(tick_marks, label_names)
-    plt.yticks(tick_marks, label_names)
-    plt.xlabel("Predicted Label")
-    plt.ylabel("True Label")
+    summary: Dict[str, Any] = {
+        "loss": float(eval_result["loss"]),
+        "accuracy": float(accuracy_score(y_true, y_pred)) if y_true else 0.0,
+        "ap": float(average_precision_score(y_true, prob_pos)) if y_true and len(set(y_true)) > 1 else 0.0,
+        "f1_macro": float(f1_score(y_true, y_pred, average="macro", zero_division=0)) if y_true else 0.0,
+        "f1_micro": float(f1_score(y_true, y_pred, average="micro", zero_division=0)) if y_true else 0.0,
+        "f1_weighted": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)) if y_true else 0.0,
+        "per_class": [],
+        "confusion_matrix": cm.tolist(),
+    }
 
-    threshold = cm.max() / 2.0 if cm.size > 0 and cm.max() > 0 else 0.0
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            color = "white" if cm[i, j] > threshold else "black"
-            plt.text(j, i, str(cm[i, j]), ha="center", va="center", color=color)
+    precisions = precision_score(y_true, y_pred, labels=labels, average=None, zero_division=0)
+    recalls = recall_score(y_true, y_pred, labels=labels, average=None, zero_division=0)
+    f1s = f1_score(y_true, y_pred, labels=labels, average=None, zero_division=0)
+    supports = [int(sum(1 for label in y_true if label == class_idx)) for class_idx in labels]
+    for class_idx, name in enumerate(label_names):
+        summary["per_class"].append(
+            {
+                "label": f"class_{class_idx}",
+                "label_name": name,
+                "precision": float(precisions[class_idx]),
+                "recall": float(recalls[class_idx]),
+                "f1": float(f1s[class_idx]),
+                "support": supports[class_idx],
+            }
+        )
 
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=200)
-    plt.close()
-    return cm.tolist()
+    if cm.shape == (2, 2):
+        tn, fp, fn, tp = cm.ravel()
+        summary["binary_table"] = {
+            "TP": int(tp),
+            "FP": int(fp),
+            "FN": int(fn),
+            "TN": int(tn),
+        }
+    else:
+        summary["binary_table"] = {}
+    return summary
+
+
+def plot_loss_curve(
+    train_losses: List[float],
+    val_losses: List[float],
+    test_summary: Dict[str, Any],
+    save_path: str,
+) -> None:
+    epochs = list(range(1, len(train_losses) + 1))
+    fig, axes = plt.subplots(3, 1, figsize=(10, 11), gridspec_kw={"height_ratios": [3.2, 1.5, 1.2]})
+
+    ax = axes[0]
+    ax.plot(epochs, train_losses, marker="o", label="train_loss")
+    ax.plot(epochs, val_losses, marker="o", label="val_loss")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Average Loss")
+    ax.set_title("Train / Val Loss")
+    ax.grid(True, linestyle="--", alpha=0.4)
+    ax.legend()
+
+    metric_rows = []
+    for row in test_summary["per_class"]:
+        metric_rows.append(
+            [
+                row["label"],
+                f"{row['precision']:.4f}",
+                f"{row['recall']:.4f}",
+                f"{row['f1']:.4f}",
+                str(row["support"]),
+            ]
+        )
+    metric_rows.extend(
+        [
+            ["accuracy", "-", "-", f"{test_summary['accuracy']:.4f}", "-"],
+            ["f1_macro", "-", "-", f"{test_summary['f1_macro']:.4f}", "-"],
+            ["f1_micro", "-", "-", f"{test_summary['f1_micro']:.4f}", "-"],
+            ["f1_weighted", "-", "-", f"{test_summary['f1_weighted']:.4f}", "-"],
+            ["AP", "-", "-", f"{test_summary['ap']:.4f}", "-"],
+        ]
+    )
+
+    ax = axes[1]
+    ax.axis("off")
+    metrics_table = ax.table(
+        cellText=metric_rows,
+        colLabels=["metric/class", "precision", "recall", "F1", "support"],
+        loc="center",
+        cellLoc="center",
+    )
+    metrics_table.auto_set_font_size(False)
+    metrics_table.set_fontsize(9)
+    metrics_table.scale(1, 1.25)
+    ax.set_title("Test Metrics")
+
+    ax = axes[2]
+    ax.axis("off")
+    binary = test_summary.get("binary_table") or {}
+    if binary:
+        binary_rows = [
+            ["Actual Positive", f"TP={binary['TP']}", f"FN={binary['FN']}"],
+            ["Actual Negative", f"FP={binary['FP']}", f"TN={binary['TN']}"],
+        ]
+        confusion_table = ax.table(
+            cellText=binary_rows,
+            colLabels=["", "Pred Positive", "Pred Negative"],
+            loc="center",
+            cellLoc="center",
+        )
+        confusion_table.auto_set_font_size(False)
+        confusion_table.set_fontsize(10)
+        confusion_table.scale(1, 1.35)
+        ax.set_title("TP / FP / FN / TN Table")
+    else:
+        ax.text(0.5, 0.5, "Binary TP/FP/FN/TN table is only available for two classes.", ha="center", va="center")
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=200)
+    plt.close(fig)
 
 
 def save_wrong_predictions(
@@ -612,9 +692,7 @@ def run_one_experiment(cfg: Dict[str, Any], data_info: Dict[str, Any], base_dir:
     paths = {
         "best_model": os.path.join(run_dir, "best_model.pt"),
         "loss_curve": os.path.join(run_dir, "loss_curve.png"),
-        "confusion_matrix": os.path.join(run_dir, "confusion_matrix.png"),
-        "experiment_config": os.path.join(run_dir, "experiment_config.json"),
-        "wrong_predictions": os.path.join(run_dir, "wrong_predictions.csv"),
+        "wrong": os.path.join(run_dir, "wrong.csv"),
     }
 
     word2id = data_info["word2id"]
@@ -622,16 +700,6 @@ def run_one_experiment(cfg: Dict[str, Any], data_info: Dict[str, Any], base_dir:
     label_names = metadata["label_names"]
     num_classes = int(metadata["num_classes"])
     pad_idx = word2id.get("<PAD>", 0)
-
-    config_payload = {
-        "run_name": run_name,
-        "run_dir": run_dir,
-        "device": str(device),
-        "config": cfg,
-        "data": metadata,
-        "output_files": paths,
-    }
-    dump_json(paths["experiment_config"], config_payload)
 
     train_loader, val_loader, test_loader = create_loaders(data_info, cfg)
     class_weights = None
@@ -744,53 +812,41 @@ def run_one_experiment(cfg: Dict[str, Any], data_info: Dict[str, Any], base_dir:
             )
             break
 
-    plot_loss_curve(train_losses, val_losses, paths["loss_curve"])
-
     checkpoint = torch.load(paths["best_model"], map_location=device)
     model.load_state_dict(checkpoint["state_dict"])
     test_result = evaluate(model, test_loader, device, criterion)
-    test_loss = float(test_result["loss"])
-    test_acc = float(test_result["acc"])
+    test_summary = build_test_summary(test_result, label_names)
+    test_loss = float(test_summary["loss"])
+    test_acc = float(test_summary["accuracy"])
     wrong_count = save_wrong_predictions(
         test_csv=data_info["paths"]["test_csv"],
         eval_result=test_result,
         label_names=label_names,
-        save_path=paths["wrong_predictions"],
+        save_path=paths["wrong"],
     )
-    cm = plot_confusion_matrix(
-        y_true=test_result["true"],
-        y_pred=test_result["pred"],
-        label_names=label_names,
-        save_path=paths["confusion_matrix"],
-    )
+    plot_loss_curve(train_losses, val_losses, test_summary, paths["loss_curve"])
 
-    config_payload.update(
-        {
-            "best": {
-                "best_epoch": best_epoch,
-                "best_val_loss": best_val_loss,
-                "best_val_acc": best_val_acc,
-            },
-            "training_control": {
-                "stopped_early": stopped_early,
-                "stop_epoch": stop_epoch,
-                "early_stopping_patience": cfg["early_stopping_patience"],
-                "early_stopping_min_delta": cfg["early_stopping_min_delta"],
-                "class_weights": class_weights.cpu().tolist() if class_weights is not None else None,
-            },
-            "final_test": {
-                "test_loss": test_loss,
-                "test_acc": test_acc,
-                "wrong_count": wrong_count,
-                "confusion_matrix": cm,
-            },
-            "loss_history": {
-                "train_loss": train_losses,
-                "val_loss": val_losses,
-            },
-        }
-    )
-    dump_json(paths["experiment_config"], config_payload)
+    summary = {
+        "run_name": run_name,
+        "run_dir": run_dir,
+        "best": {
+            "best_epoch": best_epoch,
+            "best_val_loss": best_val_loss,
+            "best_val_acc": best_val_acc,
+        },
+        "training_control": {
+            "stopped_early": stopped_early,
+            "stop_epoch": stop_epoch,
+        },
+        "final_test": {
+            "test_loss": test_loss,
+            "test_acc": test_acc,
+            "test_f1_macro": test_summary["f1_macro"],
+            "test_ap": test_summary["ap"],
+            "wrong_count": wrong_count,
+        },
+        "output_files": paths,
+    }
 
     print(
         f"实验完成: {run_name} | "
@@ -798,7 +854,7 @@ def run_one_experiment(cfg: Dict[str, Any], data_info: Dict[str, Any], base_dir:
         f"test_acc={test_acc:.4f} | "
         f"错误样本数={wrong_count}"
     )
-    return config_payload
+    return summary
 
 
 def main() -> None:
