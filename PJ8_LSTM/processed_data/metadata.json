@@ -9,8 +9,8 @@
   ],
   "num_classes": 2,
   "label_distribution": {
-    "0": 7987,
-    "1": 4000
+    "0": 8026,
+    "1": 3961
   },
   "train_size": 8390,
   "val_size": 1798,
