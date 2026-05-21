@@ -26,9 +26,9 @@ def tokenize(text: str) -> List[str]:
 
 
 def text_to_ids(
-    text: str,
-    word2id: Dict[str, int],
-    max_len: int,
+        text: str,
+        word2id: Dict[str, int],
+        max_len: int,
 ) -> torch.Tensor:
     """与 WaimaiDataset 中分词、截断、填充规则保持一致。"""
     pad_id = word2id.get("<PAD>", 0)
@@ -43,7 +43,6 @@ def text_to_ids(
 
 
 def load_model(ckpt_path: str, device: torch.device) -> Tuple[nn.Module, Dict[str, int], int]:
-    # 兼容旧版 PyTorch：不传 weights_only
     ckpt = torch.load(ckpt_path, map_location=device)
     word2id: Dict[str, int] = ckpt["word2id"]
     hp = ckpt["hparams"]
@@ -67,11 +66,11 @@ def load_model(ckpt_path: str, device: torch.device) -> Tuple[nn.Module, Dict[st
 
 @torch.no_grad()
 def predict_text(
-    model: nn.Module,
-    text: str,
-    word2id: Dict[str, int],
-    max_len: int,
-    device: torch.device,
+        model: nn.Module,
+        text: str,
+        word2id: Dict[str, int],
+        max_len: int,
+        device: torch.device,
 ) -> Tuple[int, List[float]]:
     x = text_to_ids(text, word2id, max_len).to(device)
     logits = model(x)
@@ -81,38 +80,61 @@ def predict_text(
 
 
 def main() -> None:
-    base = os.path.dirname(os.path.abspath(__file__))
-    os.chdir(base)
+    # 修改点 1：移除 os.chdir(base)，避免它强制把工作目录切走，
+    # 这样我们在终端敲 runs/xxx.pt 时，相对路径才不会失效。
 
-    p = argparse.ArgumentParser(description="Bi-LSTM 情感预测（依赖 train.py 中的模型类）")
-    p.add_argument("--ckpt", type=str, default="model_best.pt", help="train.py 保存的权重")
-    p.add_argument("--text", type=str, default=None, help="单句文本；不填则从标准输入读一行")
+    p = argparse.ArgumentParser(description="Bi-LSTM 情感预测（支持循环交互与 runs 目录）")
+    # 修改点 2：把默认路径改到 runs 文件夹下（这里假设你有一个默认的，也可以不设默认值）
+    p.add_argument("--ckpt", type=str, default="runs/model_best.pt", help="保存的权重路径，例如 runs/exp1/model_best.pt")
+    p.add_argument("--text", type=str, default=None, help="单句文本；若不填则进入连续交互模式")
     args = p.parse_args()
 
     if not os.path.isfile(args.ckpt):
-        print("未找到检查点文件:", args.ckpt, file=sys.stderr)
-        print("请先完成 train.py 中的模型并训练，成功保存权重后再运行本脚本。", file=sys.stderr)
+        print(f"❌ 未找到检查点文件: {args.ckpt}", file=sys.stderr)
+        print("请检查路径是否正确。例如：runs/你的模型文件名.pt", file=sys.stderr)
         sys.exit(1)
 
+    print(f"⏳ 正在加载模型权重: {args.ckpt} ...")
     device = get_device()
     model, word2id, max_len = load_model(args.ckpt, device)
+    print("✅ 模型加载成功！")
 
+    # 修改点 3：如果命令行直接传了 --text，就只预测单句（保留原功能）
     if args.text is not None and len(args.text) > 0:
-        t = args.text
-    else:
-        try:
-            t = input("请输入一句评论（回车结束）: ").strip()
-        except EOFError:
-            print("", file=sys.stderr)
-            sys.exit(1)
-    if not t:
-        print("空输入", file=sys.stderr)
-        sys.exit(1)
+        label, proba = predict_text(model, args.text, word2id, max_len, device)
+        name = "正向" if label == 1 else "负向"
+        print(f"\n输入: {args.text}")
+        print(f"预测: {label}（{name}）")
+        print(f"P(负向)={proba[0]:.4f}  P(正向)={proba[1]:.4f}")
+        return
 
-    label, proba = predict_text(model, t, word2id, max_len, device)
-    name = "正向" if label == 1 else "负向"
-    print(f"预测: {label}（{name}）")
-    print(f"P(负向)={proba[0]:.4f}  P(正向)={proba[1]:.4f}")
+    # 修改点 4：如果没有传 --text，进入 while True 循环，等待用户源源不断地输入
+    print("\n" + "=" * 40)
+    print(" 进入智能情感判别系统（输入 'q' 或 'exit' 退出）")
+    print("=" * 40)
+
+    while True:
+        try:
+            t = input("\n请输入一句评论 ▷ ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n程序平稳退出。")
+            break
+
+        if not t:
+            print("⚠️ 输入不能为空，请重新输入。")
+            continue
+
+        if t.lower() in ["q", "exit", "quit"]:
+            print("👋 谢谢使用，再见！")
+            break
+
+        # 开始推理
+        label, proba = predict_text(model, t, word2id, max_len, device)
+        name = "正向" if label == 1 else "负向"
+
+        # 结果
+        print(f" 预测结果: {label} —— 【{name}】")
+        print(f" ［详细概率］ P(负向): {proba[0]:.4f} | P(正向): {proba[1]:.4f}")
 
 
 if __name__ == "__main__":
