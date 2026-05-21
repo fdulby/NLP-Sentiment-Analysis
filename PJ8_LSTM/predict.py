@@ -85,19 +85,19 @@ def main() -> None:
 
     p = argparse.ArgumentParser(description="Bi-LSTM 情感预测（支持循环交互与 runs 目录）")
     # 修改点 2：把默认路径改到 runs 文件夹下（这里假设你有一个默认的，也可以不设默认值）
-    p.add_argument("--ckpt", type=str, default="runs/model_best.pt", help="保存的权重路径，例如 runs/exp1/model_best.pt")
+    p.add_argument("--ckpt", type=str, default="runs/model_best.pt", help="找最佳参数")
     p.add_argument("--text", type=str, default=None, help="单句文本；若不填则进入连续交互模式")
     args = p.parse_args()
 
     if not os.path.isfile(args.ckpt):
-        print(f"❌ 未找到检查点文件: {args.ckpt}", file=sys.stderr)
+        print(f"未找到检查点文件: {args.ckpt}", file=sys.stderr)
         print("请检查路径是否正确。例如：runs/你的模型文件名.pt", file=sys.stderr)
         sys.exit(1)
 
-    print(f"⏳ 正在加载模型权重: {args.ckpt} ...")
+    print(f"正在加载模型权重: {args.ckpt} ...")
     device = get_device()
     model, word2id, max_len = load_model(args.ckpt, device)
-    print("✅ 模型加载成功！")
+    print("模型加载成功！")
 
     # 修改点 3：如果命令行直接传了 --text，就只预测单句（保留原功能）
     if args.text is not None and len(args.text) > 0:
@@ -121,7 +121,7 @@ def main() -> None:
             break
 
         if not t:
-            print("⚠️ 输入不能为空，请重新输入。")
+            print("⚠输入不能为空，请重新输入。")
             continue
 
         if t.lower() in ["q", "exit", "quit"]:
