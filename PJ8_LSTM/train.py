@@ -581,7 +581,7 @@ def plot_loss_curve(
     save_path: str,
 ) -> None:
     epochs = list(range(1, len(train_losses) + 1))
-    fig, axes = plt.subplots(3, 1, figsize=(10, 11), gridspec_kw={"height_ratios": [3.2, 1.5, 1.2]})
+    fig, axes = plt.subplots(2, 1, figsize=(9, 7), gridspec_kw={"height_ratios": [4.5, 1.2]})
 
     ax = axes[0]
     ax.plot(epochs, train_losses, marker="o", label="train_loss")
@@ -592,60 +592,38 @@ def plot_loss_curve(
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend()
 
-    metric_rows = []
-    for row in test_summary["per_class"]:
-        metric_rows.append(
-            [
-                row["label"],
-                f"{row['precision']:.4f}",
-                f"{row['recall']:.4f}",
-                f"{row['f1']:.4f}",
-                str(row["support"]),
-            ]
-        )
-    metric_rows.extend(
-        [
-            ["accuracy", "-", "-", f"{test_summary['accuracy']:.4f}", "-"],
-            ["f1_macro", "-", "-", f"{test_summary['f1_macro']:.4f}", "-"],
-            ["f1_micro", "-", "-", f"{test_summary['f1_micro']:.4f}", "-"],
-            ["f1_weighted", "-", "-", f"{test_summary['f1_weighted']:.4f}", "-"],
-            ["AP", "-", "-", f"{test_summary['ap']:.4f}", "-"],
-        ]
-    )
-
     ax = axes[1]
     ax.axis("off")
-    metrics_table = ax.table(
-        cellText=metric_rows,
-        colLabels=["metric/class", "precision", "recall", "F1", "support"],
-        loc="center",
-        cellLoc="center",
-    )
-    metrics_table.auto_set_font_size(False)
-    metrics_table.set_fontsize(9)
-    metrics_table.scale(1, 1.25)
-    ax.set_title("Test Metrics")
-
-    ax = axes[2]
-    ax.axis("off")
-    binary = test_summary.get("binary_table") or {}
-    if binary:
-        binary_rows = [
-            ["Actual Positive", f"TP={binary['TP']}", f"FN={binary['FN']}"],
-            ["Actual Negative", f"FP={binary['FP']}", f"TN={binary['TN']}"],
-        ]
-        confusion_table = ax.table(
-            cellText=binary_rows,
-            colLabels=["", "Pred Positive", "Pred Negative"],
-            loc="center",
-            cellLoc="center",
+    class_f1 = {row["label"]: row["f1"] for row in test_summary["per_class"]}
+    summary_items = [
+        ("Accuracy", test_summary["accuracy"]),
+        ("Class 0 F1", class_f1.get("class_0", 0.0)),
+        ("Class 1 F1", class_f1.get("class_1", 0.0)),
+    ]
+    x_positions = [0.17, 0.5, 0.83]
+    for x, (name, value) in zip(x_positions, summary_items):
+        ax.text(
+            x,
+            0.62,
+            f"{value:.4f}",
+            ha="center",
+            va="center",
+            fontsize=22,
+            fontweight="bold",
+            transform=ax.transAxes,
         )
-        confusion_table.auto_set_font_size(False)
-        confusion_table.set_fontsize(10)
-        confusion_table.scale(1, 1.35)
-        ax.set_title("TP / FP / FN / TN Table")
-    else:
-        ax.text(0.5, 0.5, "Binary TP/FP/FN/TN table is only available for two classes.", ha="center", va="center")
+        ax.text(
+            x,
+            0.28,
+            name,
+            ha="center",
+            va="center",
+            fontsize=11,
+            color="#444444",
+            transform=ax.transAxes,
+        )
+    ax.axhline(0.02, color="#dddddd", linewidth=1)
+    ax.set_title("Test Summary", pad=8)
 
     fig.tight_layout()
     fig.savefig(save_path, dpi=200)
