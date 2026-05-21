@@ -44,6 +44,8 @@ CONFIG: Dict[str, Any] = {
         "max_len",
         "num_layers",
         "embed_dim",
+        "use_class_weights",
+        "early_stopping_patience",
     ],
 
     # 随机性
@@ -63,6 +65,9 @@ CONFIG: Dict[str, Any] = {
     "weight_decay": 0.0,
     "grad_clip": 5.0,
     "num_workers": 0,
+    "early_stopping_patience": 4,
+    "early_stopping_min_delta": 1e-4,
+    "use_class_weights": True,
 
     # 类别名称：None 表示优先读 metadata.json；如果没有 metadata，则自动按 label 数量生成。
     "label_names": None,
@@ -495,6 +500,32 @@ def create_loaders(data_info: Dict[str, Any], cfg: Dict[str, Any]) -> Tuple[Data
     return train_loader, val_loader, test_loader
 
 
+def compute_class_weights(train_csv: str, num_classes: int, device: torch.device) -> torch.Tensor:
+    labels = pd.read_csv(train_csv, usecols=["label"])["label"].astype(int)
+    counts = labels.value_counts().reindex(range(num_classes), fill_value=0).sort_index()
+    if (counts == 0).any():
+        missing = counts[counts == 0].index.tolist()
+        raise ValueError(f"训练集中缺少类别: {missing}")
+
+    total = float(counts.sum())
+    weights = [total / (num_classes * float(count)) for count in counts.tolist()]
+    return torch.tensor(weights, dtype=torch.float32, device=device)
+
+
+def is_validation_better(
+    val_acc: float,
+    val_loss: float,
+    best_val_acc: float,
+    best_val_loss: float,
+    min_delta: float,
+) -> bool:
+    if val_acc > best_val_acc + min_delta:
+        return True
+    if abs(val_acc - best_val_acc) <= min_delta and val_loss < best_val_loss - min_delta:
+        return True
+    return False
+
+
 def plot_loss_curve(train_losses: List[float], val_losses: List[float], save_path: str) -> None:
     epochs = list(range(1, len(train_losses) + 1))
     plt.figure(figsize=(8, 5))
@@ -603,6 +634,18 @@ def run_one_experiment(cfg: Dict[str, Any], data_info: Dict[str, Any], base_dir:
     dump_json(paths["experiment_config"], config_payload)
 
     train_loader, val_loader, test_loader = create_loaders(data_info, cfg)
+    class_weights = None
+    if cfg["use_class_weights"]:
+        class_weights = compute_class_weights(
+            train_csv=data_info["paths"]["train_csv"],
+            num_classes=num_classes,
+            device=device,
+        )
+        print(
+            "类别权重:",
+            {label_names[idx]: round(float(weight), 4) for idx, weight in enumerate(class_weights.cpu())},
+        )
+
     model = BiLSTMClassifier(
         vocab_size=len(word2id),
         embed_dim=cfg["embed_dim"],
@@ -612,7 +655,7 @@ def run_one_experiment(cfg: Dict[str, Any], data_info: Dict[str, Any], base_dir:
         dropout=cfg["dropout"],
         pad_idx=pad_idx,
     ).to(device)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=cfg["lr"],
@@ -624,6 +667,9 @@ def run_one_experiment(cfg: Dict[str, Any], data_info: Dict[str, Any], base_dir:
     best_epoch = 0
     train_losses: List[float] = []
     val_losses: List[float] = []
+    epochs_without_improvement = 0
+    stopped_early = False
+    stop_epoch = cfg["epochs"]
 
     print(f"\n开始实验: {run_name}")
     print(f"设备: {device}")
@@ -644,13 +690,18 @@ def run_one_experiment(cfg: Dict[str, Any], data_info: Dict[str, Any], base_dir:
         train_losses.append(float(train_loss))
         val_losses.append(val_loss)
 
-        is_better = val_acc > best_val_acc or (
-            abs(val_acc - best_val_acc) < 1e-12 and val_loss < best_val_loss
+        is_better = is_validation_better(
+            val_acc=val_acc,
+            val_loss=val_loss,
+            best_val_acc=best_val_acc,
+            best_val_loss=best_val_loss,
+            min_delta=cfg["early_stopping_min_delta"],
         )
         if is_better:
             best_val_acc = val_acc
             best_val_loss = val_loss
             best_epoch = epoch
+            epochs_without_improvement = 0
             torch.save(
                 {
                     "state_dict": model.state_dict(),
@@ -672,14 +723,26 @@ def run_one_experiment(cfg: Dict[str, Any], data_info: Dict[str, Any], base_dir:
                 },
                 paths["best_model"],
             )
+        else:
+            epochs_without_improvement += 1
 
         print(
             f"Epoch {epoch:03d} | "
             f"train_loss={train_loss:.4f} | "
             f"val_loss={val_loss:.4f} | "
             f"val_acc={val_acc:.4f} | "
-            f"best_epoch={best_epoch}"
+            f"best_epoch={best_epoch} | "
+            f"no_improve={epochs_without_improvement}/{cfg['early_stopping_patience']}"
         )
+
+        if epochs_without_improvement >= cfg["early_stopping_patience"]:
+            stopped_early = True
+            stop_epoch = epoch
+            print(
+                f"早停触发: 连续 {cfg['early_stopping_patience']} 轮验证集无提升，"
+                f"停止在 epoch {epoch}，最佳 epoch 为 {best_epoch}。"
+            )
+            break
 
     plot_loss_curve(train_losses, val_losses, paths["loss_curve"])
 
@@ -707,6 +770,13 @@ def run_one_experiment(cfg: Dict[str, Any], data_info: Dict[str, Any], base_dir:
                 "best_epoch": best_epoch,
                 "best_val_loss": best_val_loss,
                 "best_val_acc": best_val_acc,
+            },
+            "training_control": {
+                "stopped_early": stopped_early,
+                "stop_epoch": stop_epoch,
+                "early_stopping_patience": cfg["early_stopping_patience"],
+                "early_stopping_min_delta": cfg["early_stopping_min_delta"],
+                "class_weights": class_weights.cpu().tolist() if class_weights is not None else None,
             },
             "final_test": {
                 "test_loss": test_loss,
