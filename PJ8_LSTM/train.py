@@ -101,6 +101,12 @@ def dump_json(path: str, obj: Any) -> None:
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
 
+def tokenize(text: str) -> List[str]:
+    if hasattr(jieba, "lcut"):
+        return jieba.lcut(text)
+    return list(jieba.cut(text))
+
+
 class WaimaiDataset(Dataset):
     """分词 -> id 序列；截断/填充为 max_len。"""
 
@@ -117,7 +123,7 @@ class WaimaiDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         text = str(self.df.iloc[idx]["text"])
         label = int(self.df.iloc[idx]["label"])
-        tokens = jieba.lcut(text.strip())
+        tokens = tokenize(text.strip())
         ids: List[int] = [self.word2id.get(t, self.unk_id) for t in tokens if t and t.strip()]
         if len(ids) > self.max_len:
             ids = ids[: self.max_len]

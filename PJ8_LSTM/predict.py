@@ -19,6 +19,11 @@ import torch.nn as nn
 from train import BiLSTMClassifier, get_device
 
 
+def tokenize(text: str) -> List[str]:
+    if hasattr(jieba, "lcut"):
+        return jieba.lcut(text)
+    return list(jieba.cut(text))
+
 
 def text_to_ids(
     text: str,
@@ -28,7 +33,7 @@ def text_to_ids(
     """与 WaimaiDataset 中分词、截断、填充规则保持一致。"""
     pad_id = word2id.get("<PAD>", 0)
     unk_id = word2id.get("<UNK>", 1)
-    tokens = jieba.lcut(text.strip())
+    tokens = tokenize(text.strip())
     ids: List[int] = [word2id.get(t, unk_id) for t in tokens if t and t.strip()]
     if len(ids) > max_len:
         ids = ids[:max_len]

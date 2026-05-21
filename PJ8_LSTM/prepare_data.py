@@ -48,6 +48,12 @@ def read_json(path: str) -> Any:
         return json.load(f)
 
 
+def tokenize(text: str) -> List[str]:
+    if hasattr(jieba, "lcut"):
+        return jieba.lcut(text)
+    return list(jieba.cut(text))
+
+
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     自动探测文本列与标签列，统一重命名为 text / label。
@@ -171,7 +177,7 @@ def build_vocab(train_df: pd.DataFrame, min_freq: int) -> Dict[str, int]:
     print("正在使用 jieba 对训练集分词并统计词频...")
     all_tokens: List[str] = []
     for text in train_df["text"].astype(str):
-        all_tokens.extend(jieba.lcut(text.strip()))
+        all_tokens.extend(tokenize(text.strip()))
 
     word_freq = Counter(token for token in all_tokens if token and token.strip())
     vocab_words = [word for word, count in word_freq.items() if count >= min_freq]
